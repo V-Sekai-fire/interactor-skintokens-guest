@@ -1,0 +1,4 @@
+build*/
+__pycache__/
+.godot/
+tests/rig/addons/godot_sandbox/libgodot_riscv*

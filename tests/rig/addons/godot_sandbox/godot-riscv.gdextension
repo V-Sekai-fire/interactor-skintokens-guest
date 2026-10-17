@@ -1,0 +1,13 @@
+[configuration]
+entry_symbol = "riscv_library_init"
+compatibility_minimum = "4.4"
+
+[libraries]
+macos.release.double = "res://addons/godot_sandbox/libgodot_riscv.macos.template_release.double.universal"
+macos.release = "res://addons/godot_sandbox/libgodot_riscv.macos.template_release.double.universal"
+macos.double = "res://addons/godot_sandbox/libgodot_riscv.macos.template_release.double.universal"
+macos = "res://addons/godot_sandbox/libgodot_riscv.macos.template_release.double.universal"
+windows.release.double.x86_64 = "res://addons/godot_sandbox/libgodot_riscv.windows.template_release.double.x86_64.dll"
+windows.release.x86_64 = "res://addons/godot_sandbox/libgodot_riscv.windows.template_release.double.x86_64.dll"
+linux.release.double.x86_64 = "res://addons/godot_sandbox/libgodot_riscv.linux.template_release.double.x86_64.so"
+linux.release.x86_64 = "res://addons/godot_sandbox/libgodot_riscv.linux.template_release.double.x86_64.so"

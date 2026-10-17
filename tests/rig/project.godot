@@ -1,0 +1,12 @@
+; The Godot project the skintokens.elf rig check runs in; it holds no scene.
+config_version=5
+
+[application]
+
+config/name="skintokens rig"
+
+
+[sandbox]
+
+toolchain/docker_enabled=false
+binary_translation/enabled=false
