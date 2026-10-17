@@ -22,3 +22,9 @@ godot --path tests/rig --resolution 64x64 --script run_rig.gd -- \
 ## Licence
 
 The licence is not stated. skin-tokens-ggml and the SkinTokens model are MIT; `vendor/nlohmann/json.hpp` is MIT.
+
+## Run in a browser
+
+`tests/web/` is the same rig on Godot's WebGPU RenderingDevice. Export it with `godot --headless --path tests/web --export-pack Web index.pck`, put that pck and `skintokens.elf`'s dependencies into a Godot web export built with WebGPU and godot-sandbox, and serve it with `serve_range.py` (cross-origin isolation plus HTTP range requests). Put the GGUF directory under `w/` and meshes under `m/`. `node rig.mjs chrome <url> out.glb log.txt` opens the page in a window and saves the rigged GLB.
+
+The host fetches weights in 64 MiB range requests and caps ggml-rd's buffers at 128 MiB, WebGPU's default binding size.

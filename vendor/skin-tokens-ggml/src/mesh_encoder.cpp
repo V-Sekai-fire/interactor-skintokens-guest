@@ -193,25 +193,24 @@ result<std::vector<float>> encode_mesh(const weight_component & weights, ggml_ba
     auto * state = ggml_get_rows(context, projected, indices);
     const std::string cross = "mesh.enc.xattn";
     auto * q = linear(context, norm(context, state, weights, cross + ".ln_1"), weights, cross + ".attn.c_q", false);
-    auto * kv = linear(context, norm(context, projected, weights, cross + ".ln_2"), weights, cross + ".attn.c_kv", false);
-    q = ggml_reshape_3d(context, q, head_dim, heads, query_count);
-    auto * k = ggml_view_3d(context, kv, head_dim, heads, data_count,
-        static_cast<std::size_t>(2 * head_dim) * kv->nb[0], kv->nb[1], 0);
-    auto * v = ggml_view_3d(context, kv, head_dim, heads, data_count,
-        static_cast<std::size_t>(2 * head_dim) * kv->nb[0], kv->nb[1],
-        static_cast<std::size_t>(head_dim) * kv->nb[0]);
-    state = ggml_add(context, state, linear(context, attention(context, q, k, v, query_count),
-                                            weights, cross + ".attn.c_proj"));
+    auto * data = norm(context, projected, weights, cross + ".ln_2");
+    // c_kv's output rows are per head: K (head_dim rows) then V. One head at a time keeps the
+    // 54K-point projection and scores under the web's 128 MiB binding.
+    auto * kv_weight = need(weights, cross + ".attn.c_kv.w");
+    auto * attended = attend_by_head(context, q, heads, head_dim, data_count, [&](std::int64_t head) {
+        return rows_linear(context, kv_weight, nullptr, head * 2 * head_dim, 2 * head_dim, data);
+    });
+    state = ggml_add(context, state, linear(context, attended, weights, cross + ".attn.c_proj"));
     state = ggml_add(context, state, mlp(context, norm(context, state, weights, cross + ".ln_3"), weights, cross + ".mlp"));
     for (std::size_t layer = 0; layer < 8U; ++layer) {
         const std::string stem = "mesh.enc.attn.resblocks." + std::to_string(layer);
         auto * qkv = linear(context, norm(context, state, weights, stem + ".ln_1"), weights, stem + ".attn.c_qkv", false);
         q = ggml_view_3d(context, qkv, head_dim, heads, query_count,
             static_cast<std::size_t>(3 * head_dim) * qkv->nb[0], qkv->nb[1], 0);
-        k = ggml_view_3d(context, qkv, head_dim, heads, query_count,
+        auto * k = ggml_view_3d(context, qkv, head_dim, heads, query_count,
             static_cast<std::size_t>(3 * head_dim) * qkv->nb[0], qkv->nb[1],
             static_cast<std::size_t>(head_dim) * qkv->nb[0]);
-        v = ggml_view_3d(context, qkv, head_dim, heads, query_count,
+        auto * v = ggml_view_3d(context, qkv, head_dim, heads, query_count,
             static_cast<std::size_t>(3 * head_dim) * qkv->nb[0], qkv->nb[1],
             static_cast<std::size_t>(2 * head_dim) * qkv->nb[0]);
         state = ggml_add(context, state, linear(context, attention(context, q, k, v, query_count),

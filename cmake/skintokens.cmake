@@ -3,6 +3,7 @@ get_filename_component(SKINTOKENS_GUEST_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSO
 set(_st ${SKINTOKENS_GUEST_ROOT}/vendor/skin-tokens-ggml)
 add_stage_elf(skintokens
 	${SKINTOKENS_GUEST_ROOT}/guest/skintokens/main.cpp
+	${_st}/src/attention.cpp
 	${_st}/src/backend.cpp
 	${_st}/src/binding.cpp
 	${_st}/src/file_source.cpp

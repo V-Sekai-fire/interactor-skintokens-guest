@@ -2,7 +2,9 @@
 
 #include <cmath>
 #include <cstdio>
+#include <algorithm>
 #include <memory>
+#include <vector>
 
 namespace skintokens::detail {
 namespace {
@@ -53,19 +55,6 @@ qkv_values split_self(ggml_context * context, ggml_tensor * q, ggml_tensor * k,
     return {part(0U), part(1U), part(2U)};
 }
 
-std::pair<ggml_tensor *, ggml_tensor *> split_cross(
-    ggml_context * context, ggml_tensor * k, ggml_tensor * v, std::int64_t sequence) {
-    // Cross attention applies the analogous concatenate-then-split layout to
-    // K/V. See upstream Tripo2AttnProcessor2_0 lines 100-111.
-    auto * joined = ggml_concat(context, k, v, 0);
-    joined = ggml_reshape_3d(context, ggml_cont(context, joined), head_dim * 2, heads, sequence);
-    const auto part = [&](std::size_t index) {
-        return ggml_view_3d(context, joined, head_dim, heads, sequence,
-            joined->nb[1], joined->nb[2], index * static_cast<std::size_t>(head_dim) * sizeof(float));
-    };
-    return {part(0U), part(1U)};
-}
-
 ggml_tensor * attend(ggml_context * context, ggml_tensor * q, ggml_tensor * k,
                      ggml_tensor * v, std::int64_t query_count, std::int64_t) {
     q = ggml_permute(context, q, 0, 2, 1, 3);
@@ -92,17 +81,31 @@ ggml_tensor * self_attention(ggml_context * context, ggml_tensor * input,
                   weights, stem + ".to_out.0");
 }
 
-ggml_tensor * cross_attention(ggml_context * context, ggml_tensor * input, ggml_tensor * data,
+// The 54K-point data arrives in blocks of columns: at width 768 one [width, data] tensor is
+// 166 MB, over the web's 128 MiB binding. Every op on it is per column, so blocks change nothing.
+ggml_tensor * cross_attention(ggml_context * context, ggml_tensor * input,
+                              const std::vector<ggml_tensor *> & data_blocks,
                               const weight_component & weights, const std::string & stem,
                               std::int64_t query_count, std::int64_t data_count) {
     auto * q = linear(context, input, weights, stem + ".to_q");
-    auto * normalized_data = norm(context, data, weights, stem + ".norm_cross");
-    auto [k, v] = split_cross(context,
-        linear(context, normalized_data, weights, stem + ".to_k"),
-        linear(context, normalized_data, weights, stem + ".to_v"), data_count);
-    q = ggml_reshape_3d(context, q, head_dim, heads, query_count);
-    return linear(context, attend(context, q, k, v, query_count, data_count),
-                  weights, stem + ".to_out.0");
+    std::vector<ggml_tensor *> normalized;
+    for (auto * block : data_blocks) normalized.push_back(norm(context, block, weights, stem + ".norm_cross"));
+    // split_cross's layout one head at a time: head h is rows [2h, 2h + 2) * head_dim of
+    // concat(to_k, to_v), so the first heads/2 heads take K and V from to_k, the rest from to_v.
+    (void) query_count;
+    auto * attended = attend_by_head(context, q, heads, head_dim, data_count, [&](std::int64_t head) {
+        const std::int64_t first = head * 2 * head_dim;
+        const bool from_k = first < width;
+        const std::string part = stem + (from_k ? ".to_k" : ".to_v");
+        ggml_tensor * joined = nullptr;
+        for (auto * block : normalized) {
+            auto * kv = rows_linear(context, need(weights, part + ".w"), weights.tensor(part + ".b"),
+                                    from_k ? first : first - width, 2 * head_dim, block);
+            joined = joined == nullptr ? kv : ggml_concat(context, joined, kv, 1);
+        }
+        return joined;
+    });
+    return linear(context, attended, weights, stem + ".to_out.0");
 }
 
 ggml_tensor * feed_forward(ggml_context * context, ggml_tensor * input,
@@ -120,7 +123,7 @@ ggml_tensor * self_block(ggml_context * context, ggml_tensor * state,
         norm(context, state, weights, stem + ".norm3"), weights, stem + ".ff"));
 }
 
-ggml_tensor * cross_block(ggml_context * context, ggml_tensor * state, ggml_tensor * data,
+ggml_tensor * cross_block(ggml_context * context, ggml_tensor * state, const std::vector<ggml_tensor *> & data,
                           const weight_component & weights, const std::string & stem,
                           std::int64_t query_count, std::int64_t data_count) {
     state = ggml_add(context, state, cross_attention(context,
@@ -224,7 +227,7 @@ result<tensor_snapshot> run_skin_vae_fixture(const weight_component & weights, g
 
     auto * cond_projected = linear(context, input, weights, "vae.cond_encoder.proj_in");
     auto * cond = ggml_get_rows(context, cond_projected, indices);
-    cond = cross_block(context, cond, cond_projected, weights, "vae.cond_encoder.blocks.0",
+    cond = cross_block(context, cond, {cond_projected}, weights, "vae.cond_encoder.blocks.0",
                        condition_queries, points_count);
     std::vector<std::pair<std::string, ggml_tensor *>> snapshots{{"cond_projected", cond_projected}, {"cond_cross", cond}};
     for (std::size_t layer = 0; layer < 2U; ++layer) {
@@ -249,7 +252,7 @@ result<tensor_snapshot> run_skin_vae_fixture(const weight_component & weights, g
     }
     snapshots.emplace_back("decoder_cache", decoder);
     auto * query = linear(context, input, weights, "vae.decoder.proj_query");
-    query = cross_block(context, query, decoder, weights, "vae.decoder.blocks.10", points_count, decoder_sequence);
+    query = cross_block(context, query, {decoder}, weights, "vae.decoder.blocks.10", points_count, decoder_sequence);
     snapshots.emplace_back("decoder_cross", query);
     auto * logits = linear(context, norm(context, query, weights, "vae.decoder.norm_out"), weights, "vae.decoder.proj_out");
     auto * output = ggml_sigmoid(context, logits);
@@ -294,8 +297,15 @@ result<std::vector<float>> encode_skin_condition(const weight_component & weight
     auto * input = ggml_new_tensor_2d(context, GGML_TYPE_F32, 54, data_count);
     auto * indices = ggml_new_tensor_1d(context, GGML_TYPE_I32, query_count);
     ggml_set_input(input); ggml_set_input(indices);
-    auto * projected = linear(context, input, weights, "vae.cond_encoder.proj_in");
-    auto * state = ggml_get_rows(context, projected, indices);
+    // proj_in per block of points; the queries' rows are the same columns projected on their own.
+    constexpr std::int64_t data_block = 16384;
+    std::vector<ggml_tensor *> projected;
+    for (std::int64_t first = 0; first < data_count; first += data_block) {
+        auto * part = ggml_view_2d(context, input, 54, std::min(data_block, data_count - first), input->nb[1],
+                                   static_cast<std::size_t>(first) * input->nb[1]);
+        projected.push_back(linear(context, part, weights, "vae.cond_encoder.proj_in"));
+    }
+    auto * state = linear(context, ggml_get_rows(context, input, indices), weights, "vae.cond_encoder.proj_in");
     state = cross_block(context, state, projected, weights, "vae.cond_encoder.blocks.0", query_count, data_count);
     for (std::size_t layer = 0; layer < 2U; ++layer)
         state = self_block(context, state, weights, "vae.cond_encoder.blocks." + std::to_string(layer + 1U), query_count);
@@ -368,7 +378,7 @@ result<std::vector<float>> decode_skin_joint(const weight_component & weights, g
         decoder_cache = read_output(state);
     }
 
-    constexpr std::size_t vertex_chunk = 16384U;
+    constexpr std::size_t vertex_chunk = 8192U; // the 3072-wide feed-forward stays under 128 MiB
     std::vector<float> result(points.size());
     for (std::size_t begin = 0; begin < points.size(); begin += vertex_chunk) {
         const std::size_t count = std::min(vertex_chunk, points.size() - begin);
@@ -380,7 +390,7 @@ result<std::vector<float>> decode_skin_joint(const weight_component & weights, g
         auto * query_input = ggml_new_tensor_2d(context, GGML_TYPE_F32, 54, static_cast<std::int64_t>(count));
         ggml_set_input(state_input); ggml_set_input(query_input);
         auto * query = linear(context, query_input, weights, "vae.decoder.proj_query");
-        query = cross_block(context, query, state_input, weights, "vae.decoder.blocks.10",
+        query = cross_block(context, query, {state_input}, weights, "vae.decoder.blocks.10",
                             static_cast<std::int64_t>(count), sequence);
         auto * output = ggml_sigmoid(context, linear(context,
             norm(context, query, weights, "vae.decoder.norm_out"), weights, "vae.decoder.proj_out"));

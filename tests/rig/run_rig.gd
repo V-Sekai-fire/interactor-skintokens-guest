@@ -28,7 +28,7 @@ func _initialize() -> void:
 		_fail("the Sandbox class is not registered")
 		return
 	_sb = ClassDB.instantiate("Sandbox")
-	_sb.memory_max = 4096
+	_sb.memory_max = int(_a.get("mem", "4096"))
 	_sb.references_max = int(_a.get("refs", "4096"))
 	_sb.allocations_max = 10000000
 	_sb.execution_timeout = 0
