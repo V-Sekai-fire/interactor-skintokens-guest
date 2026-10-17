@@ -262,6 +262,7 @@ static Variant skintokens_stats() {
 	std::string r = ggml_backend_rd_stats();
 	r += " syncs=" + std::to_string(g_dev.syncs());
 	r += " submits=" + std::to_string(g_dev.submits());
+	r += " permanent_slots=" + std::to_string(g_dev.permanent_slots());
 	return Variant(String(r));
 }
 

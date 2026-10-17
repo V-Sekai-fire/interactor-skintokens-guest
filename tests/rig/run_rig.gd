@@ -29,7 +29,7 @@ func _initialize() -> void:
 		return
 	_sb = ClassDB.instantiate("Sandbox")
 	_sb.memory_max = 4096
-	_sb.references_max = 4096
+	_sb.references_max = int(_a.get("refs", "4096"))
 	_sb.allocations_max = 10000000
 	_sb.execution_timeout = 0
 	var elf := FileAccess.get_file_as_bytes(_a.elf)
