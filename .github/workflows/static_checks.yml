@@ -1,0 +1,22 @@
+name: Static checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  prek:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Style checks via prek
+        uses: j178/prek-action@v3.0.0
+        with:
+          extra-args: --all-files
