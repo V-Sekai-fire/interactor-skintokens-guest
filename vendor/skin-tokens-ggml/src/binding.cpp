@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <numeric>
 #include <queue>
 #include <limits>
@@ -706,7 +707,639 @@ skin integrate(
     return output;
 }
 
+// ---- Robust weight transfer -------------------------------------------------
+
+// Same order as integrate(): greatest learned weight first, lower joint on ties.
+void keep_four(const float * row, std::size_t joint_count,
+               std::array<std::uint16_t, 4> & joints, std::array<float, 4> & weights) {
+    std::array<std::pair<float, std::uint16_t>, 4> best{};
+    for (auto & entry : best) entry = {-1.0F, 0U};
+    for (std::size_t joint = 0; joint < joint_count; ++joint) {
+        const std::pair<float, std::uint16_t> candidate{row[joint], static_cast<std::uint16_t>(joint)};
+        const auto better = [](const auto & left, const auto & right) {
+            return left.first != right.first ? left.first > right.first : left.second < right.second;
+        };
+        if (!better(candidate, best.back())) continue;
+        best.back() = candidate;
+        std::sort(best.begin(), best.end(), better);
+    }
+    float sum = 0.0F;
+    for (std::size_t slot = 0; slot < 4U; ++slot) {
+        const bool used = slot < joint_count && best[slot].first > 0.0F;
+        joints[slot] = used ? best[slot].second : 0U;
+        weights[slot] = used ? best[slot].first : 0.0F;
+        sum += weights[slot];
+    }
+    if (sum <= 1.0e-12F) {
+        joints = {best[0].second, 0U, 0U, 0U};
+        weights = {1.0F, 0.0F, 0.0F, 0.0F};
+        return;
+    }
+    for (auto & value : weights) value /= sum;
+}
+
 } // namespace
+
+skin integrate_robust_binding(
+    const skeleton & target,
+    std::span<const vec3> normalized_vertices,
+    std::span<const vec3> vertex_normals,
+    std::span<const triangle> faces,
+    std::span<const vec3> sampled_points,
+    std::span<const vec3> sampled_normals,
+    std::span<const std::uint32_t> sampled_faces,
+    std::span<const std::vector<float>> dense_joint_weights,
+    const robust_transfer_options & options) {
+    const std::size_t n = normalized_vertices.size();
+    const std::size_t joint_count = dense_joint_weights.size();
+    skin output;
+    output.rig = target;
+    output.learned = true;
+    output.transfer.robust = true;
+    output.joints.resize(n);
+    output.weights.resize(n);
+    if (n == 0U || joint_count == 0U || sampled_points.empty()) return output;
+
+    // 1. Weld coincident vertices (seams) within 1e-6 of the box diagonal.
+    vec3 low = normalized_vertices.front(), high = low;
+    for (const auto p : normalized_vertices) {
+        low = {std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z)};
+        high = {std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)};
+    }
+    const double diagonal = std::max(static_cast<double>(distance(low, high)), 1.0e-12);
+    const double weld = diagonal * 1.0e-6;
+    const auto cell_of = [&](vec3 p) {
+        return grid_cell{static_cast<std::int64_t>(std::floor(p.x / weld)),
+                         static_cast<std::int64_t>(std::floor(p.y / weld)),
+                         static_cast<std::int64_t>(std::floor(p.z / weld))};
+    };
+    std::unordered_map<grid_cell, std::vector<std::uint32_t>, grid_cell_hash> cells;
+    cells.reserve(n);
+    std::vector<std::uint32_t> welded_of(n);
+    std::vector<vec3> position;
+    std::vector<dvec3> normal_sum;
+    for (std::size_t vertex = 0; vertex < n; ++vertex) {
+        const auto p = normalized_vertices[vertex];
+        const auto home = cell_of(p);
+        std::uint32_t found = std::numeric_limits<std::uint32_t>::max();
+        for (std::int64_t x = -1; x <= 1 && found == std::numeric_limits<std::uint32_t>::max(); ++x)
+            for (std::int64_t y = -1; y <= 1 && found == std::numeric_limits<std::uint32_t>::max(); ++y)
+                for (std::int64_t z = -1; z <= 1 && found == std::numeric_limits<std::uint32_t>::max(); ++z) {
+                    const auto it = cells.find({home.x + x, home.y + y, home.z + z});
+                    if (it == cells.end()) continue;
+                    for (const auto candidate : it->second)
+                        if (static_cast<double>(distance(position[candidate], p)) <= weld) { found = candidate; break; }
+                }
+        if (found == std::numeric_limits<std::uint32_t>::max()) {
+            found = static_cast<std::uint32_t>(position.size());
+            position.push_back(p);
+            normal_sum.push_back({0.0, 0.0, 0.0});
+            cells[home].push_back(found);
+        }
+        welded_of[vertex] = found;
+        if (vertex < vertex_normals.size()) {
+            const auto normal = vertex_normals[vertex];
+            normal_sum[found].x += normal.x; normal_sum[found].y += normal.y; normal_sum[found].z += normal.z;
+        }
+    }
+    const std::size_t count = position.size();
+    output.transfer.welded = count;
+    std::vector<std::array<std::uint32_t, 3>> welded_faces;
+    welded_faces.reserve(faces.size());
+    std::vector<std::int32_t> welded_face_of(faces.size(), -1);
+    std::vector<std::vector<std::uint32_t>> faces_at(count);
+    for (std::size_t index = 0; index < faces.size(); ++index) {
+        const auto & face = faces[index];
+        if (face[0] >= n || face[1] >= n || face[2] >= n) continue;
+        const std::array<std::uint32_t, 3> value{welded_of[face[0]], welded_of[face[1]], welded_of[face[2]]};
+        if (value[0] == value[1] || value[1] == value[2] || value[2] == value[0]) continue;
+        welded_face_of[index] = static_cast<std::int32_t>(welded_faces.size());
+        for (const auto corner : value) faces_at[corner].push_back(static_cast<std::uint32_t>(welded_faces.size()));
+        welded_faces.push_back(value);
+    }
+    // One-ring adjacency of the welded mesh.
+    std::vector<std::vector<std::uint32_t>> ring(count);
+    for (const auto & face : welded_faces)
+        for (std::size_t k = 0; k < 3U; ++k) {
+            ring[face[k]].push_back(face[(k + 1U) % 3U]);
+            ring[face[k]].push_back(face[(k + 2U) % 3U]);
+        }
+    for (auto & list : ring) {
+        std::sort(list.begin(), list.end());
+        list.erase(std::unique(list.begin(), list.end()), list.end());
+    }
+    std::vector<dvec3> normal(count);
+    for (std::size_t vertex = 0; vertex < count; ++vertex) {
+        const auto value = normal_sum[vertex];
+        const double magnitude = std::sqrt(dot(value, value));
+        normal[vertex] = magnitude > 1.0e-12 ? dvec3{value.x / magnitude, value.y / magnitude, value.z / magnitude}
+                                             : dvec3{0.0, 0.0, 0.0};
+    }
+    // A sample is on the vertex's own surface when the surface path to it is
+    // not much longer than the straight line: geodesic <= ratio * euclidean +
+    // half an edge. Another finger, the other leg or the far side of a thin
+    // part are close in space but far along the surface. The geodesic is
+    // Dijkstra over welded edges, then the last step to the sample's face.
+    std::vector<double> edge_mean(count, 0.0);
+    for (std::size_t vertex = 0; vertex < count; ++vertex) {
+        for (const auto other : ring[vertex]) edge_mean[vertex] += static_cast<double>(distance(position[vertex], position[other]));
+        if (!ring[vertex].empty()) edge_mean[vertex] /= static_cast<double>(ring[vertex].size());
+    }
+    std::vector<double> geodesic(count, std::numeric_limits<double>::infinity());
+    std::vector<std::uint32_t> visited;
+    const auto walk = [&](std::uint32_t centre, double radius) {
+        for (const auto v : visited) geodesic[v] = std::numeric_limits<double>::infinity();
+        visited.assign(1U, centre);
+        geodesic[centre] = 0.0;
+        using item = std::pair<double, std::uint32_t>;
+        std::priority_queue<item, std::vector<item>, std::greater<>> pending;
+        pending.emplace(0.0, centre);
+        while (!pending.empty()) {
+            const auto [d, at] = pending.top();
+            pending.pop();
+            if (d != geodesic[at]) continue;
+            for (const auto next : ring[at]) {
+                const double candidate = d + static_cast<double>(distance(position[at], position[next]));
+                if (candidate > radius || candidate >= geodesic[next]) continue;
+                if (!std::isfinite(geodesic[next])) visited.push_back(next);
+                geodesic[next] = candidate;
+                pending.emplace(candidate, next);
+            }
+        }
+    };
+    const auto on_surface = [&](std::uint32_t centre, std::uint32_t sample, double straight) {
+        if (sample >= sampled_faces.size() || sampled_faces[sample] >= welded_face_of.size()) return false;
+        const auto f = welded_face_of[sampled_faces[sample]];
+        if (f < 0) return false;
+        const auto p = sampled_points[sample];
+        double along = std::numeric_limits<double>::infinity();
+        for (const auto corner : welded_faces[static_cast<std::size_t>(f)])
+            if (std::isfinite(geodesic[corner]))
+                along = std::min(along, geodesic[corner] + static_cast<double>(distance(position[corner], p)));
+        return along <= static_cast<double>(options.geodesic_ratio) * straight + 0.5 * edge_mean[centre];
+    };
+
+    // 2. Match. `raw` keeps the upstream eight-neighbour interpolation as the
+    // starting point of the solve and the fallback for parts with no match.
+    std::vector<dvec3> cloud;
+    cloud.reserve(sampled_points.size());
+    for (const auto value : sampled_points) cloud.push_back({value.x, value.y, value.z});
+    const scipy_point_tree tree{std::move(cloud)};
+    const double reach = static_cast<double>(options.distance_fraction) * diagonal;
+    const double facing = std::cos(static_cast<double>(options.max_normal_degrees) * 3.14159265358979323846 / 180.0);
+    std::vector<float> raw(count * joint_count, 0.0F), robust(count * joint_count, 0.0F);
+    std::vector<std::vector<std::pair<float, std::uint32_t>>> found(count);
+    for (std::size_t vertex = 0; vertex < count; ++vertex) {
+        const auto p = position[vertex];
+        found[vertex] = tree.nearest({p.x, p.y, p.z}, std::max(options.candidates, options.interpolated));
+    }
+    // Facing is judged against the faces around the vertex, which share the
+    // winding the samples' face normals come from. An averaged vertex normal
+    // turns 45 degrees away from both sides of a hard edge and would reject
+    // every sample on a low-poly or hard-surface model.
+    std::vector<std::vector<dvec3>> incident(count);
+    for (const auto & f : welded_faces) {
+        const auto a = position[f[0]], b = position[f[1]], c = position[f[2]];
+        const dvec3 value = cross({static_cast<double>(b.x - a.x), static_cast<double>(b.y - a.y), static_cast<double>(b.z - a.z)},
+                                  {static_cast<double>(c.x - a.x), static_cast<double>(c.y - a.y), static_cast<double>(c.z - a.z)});
+        const double magnitude = std::sqrt(dot(value, value));
+        if (!(magnitude > 0.0)) continue;
+        const dvec3 unit{value.x / magnitude, value.y / magnitude, value.z / magnitude};
+        for (const auto corner : f) incident[corner].push_back(unit);
+    }
+    const auto faces_toward = [&](std::size_t vertex, vec3 s, double limit) {
+        if (incident[vertex].empty())
+            return normal[vertex].x * s.x + normal[vertex].y * s.y + normal[vertex].z * s.z >= limit;
+        for (const auto & f : incident[vertex])
+            if (f.x * s.x + f.y * s.y + f.z * s.z >= limit) return true;
+        return false;
+    };
+    std::vector<char> known(count, 0);
+    const auto interpolate = [&](std::span<const std::pair<float, std::uint32_t>> picks, float * row) {
+        double total = 0.0;
+        std::array<double, 64> inverse{};
+        const std::size_t used = std::min<std::size_t>(picks.size(), inverse.size());
+        for (std::size_t index = 0; index < used; ++index) {
+            inverse[index] = 1.0 / (std::sqrt(static_cast<double>(picks[index].first)) + 1.0e-8);
+            total += inverse[index];
+        }
+        for (std::size_t joint = 0; joint < joint_count; ++joint) {
+            double value = 0.0;
+            for (std::size_t index = 0; index < used; ++index)
+                value += inverse[index] * static_cast<double>(dense_joint_weights[joint][picks[index].second]);
+            row[joint] = static_cast<float>(value / total);
+        }
+    };
+    for (std::size_t vertex = 0; vertex < count; ++vertex) {
+        const auto & candidates = found[vertex];
+        interpolate(std::span{candidates.data(), std::min(options.interpolated, candidates.size())},
+                    raw.data() + vertex * joint_count);
+        double farthest = 0.0;
+        for (const auto & entry : candidates)
+            if (static_cast<double>(entry.first) <= reach * reach) farthest = std::sqrt(static_cast<double>(entry.first));
+        walk(static_cast<std::uint32_t>(vertex),
+             static_cast<double>(options.geodesic_ratio) * farthest + 0.5 * edge_mean[vertex]);
+        std::vector<std::pair<float, std::uint32_t>> accepted;
+        for (const auto & entry : candidates) {
+            if (accepted.size() >= options.interpolated) break;
+            if (static_cast<double>(entry.first) > reach * reach) break;
+            if (entry.second >= sampled_normals.size() ||
+                !on_surface(static_cast<std::uint32_t>(vertex), entry.second, std::sqrt(static_cast<double>(entry.first)))) continue;
+            if (!faces_toward(vertex, sampled_normals[entry.second], facing)) continue;
+            accepted.push_back(entry);
+        }
+        if (accepted.empty()) continue;
+        interpolate(accepted, robust.data() + vertex * joint_count);
+        known[vertex] = 1;
+        ++output.transfer.matched;
+    }
+
+    // 3. Outliers: a matched vertex unlike its matched neighbours.
+    std::vector<std::uint32_t> outliers;
+    std::vector<double> mean(joint_count);
+    for (std::size_t vertex = 0; vertex < count; ++vertex) {
+        if (!known[vertex]) continue;
+        std::size_t neighbours = 0U;
+        std::fill(mean.begin(), mean.end(), 0.0);
+        for (const auto other : ring[vertex]) {
+            if (!known[other]) continue;
+            ++neighbours;
+            for (std::size_t joint = 0; joint < joint_count; ++joint)
+                mean[joint] += robust[other * joint_count + joint];
+        }
+        if (neighbours < 2U) continue;
+        double difference = 0.0;
+        for (std::size_t joint = 0; joint < joint_count; ++joint)
+            difference += std::abs(mean[joint] / static_cast<double>(neighbours) - robust[vertex * joint_count + joint]);
+        if (difference > static_cast<double>(options.outlier_l1)) outliers.push_back(static_cast<std::uint32_t>(vertex));
+    }
+    for (const auto vertex : outliers) known[vertex] = 0;
+    output.transfer.outliers = outliers.size();
+
+    // 4. Mollified cotan Laplacian (Sharp and Crane 2020, section 4.5) and
+    // lumped mass on the welded mesh.
+    std::vector<std::array<double, 3>> lengths(welded_faces.size());
+    double length_sum = 0.0;
+    for (std::size_t face = 0; face < welded_faces.size(); ++face) {
+        const auto & f = welded_faces[face];
+        for (std::size_t k = 0; k < 3U; ++k) {
+            lengths[face][k] = static_cast<double>(distance(position[f[(k + 1U) % 3U]], position[f[(k + 2U) % 3U]]));
+            length_sum += lengths[face][k];
+        }
+    }
+    const double epsilon = welded_faces.empty() ? 0.0 :
+        1.0e-5 * length_sum / static_cast<double>(welded_faces.size() * 3U);
+    double delta = 0.0;
+    for (const auto & l : lengths)
+        for (std::size_t k = 0; k < 3U; ++k)
+            delta = std::max(delta, epsilon - (l[(k + 1U) % 3U] + l[(k + 2U) % 3U] - l[k]));
+    std::vector<double> mass(count, 0.0);
+    std::unordered_map<std::uint64_t, double> cotangent;
+    cotangent.reserve(welded_faces.size() * 3U);
+    for (std::size_t face = 0; face < welded_faces.size(); ++face) {
+        const auto & f = welded_faces[face];
+        const double a = lengths[face][0] + delta, b = lengths[face][1] + delta, c = lengths[face][2] + delta;
+        const double product = (a + b + c) * (-a + b + c) * (a - b + c) * (a + b - c);
+        const double area = 0.25 * std::sqrt(std::max(product, 0.0));
+        if (!(area > 0.0)) continue;
+        const std::array<double, 3> l{a, b, c};
+        for (std::size_t k = 0; k < 3U; ++k) {
+            // Angle at corner k faces edge k (between the other two corners).
+            const double opposite = l[k], left = l[(k + 1U) % 3U], right = l[(k + 2U) % 3U];
+            const double cot = (left * left + right * right - opposite * opposite) / (4.0 * area);
+            auto i = f[(k + 1U) % 3U], j = f[(k + 2U) % 3U];
+            if (i > j) std::swap(i, j);
+            cotangent[(static_cast<std::uint64_t>(i) << 32U) | j] += 0.5 * cot;
+            mass[f[k]] += area / 3.0;
+        }
+    }
+    std::vector<std::vector<std::pair<std::uint32_t, double>>> laplacian(count);
+    std::vector<double> diagonal_entry(count, 0.0);
+    for (const auto & [key, weight] : cotangent) {
+        const auto i = static_cast<std::uint32_t>(key >> 32U);
+        const auto j = static_cast<std::uint32_t>(key & 0xffffffffU);
+        laplacian[i].emplace_back(j, weight);
+        laplacian[j].emplace_back(i, weight);
+        diagonal_entry[i] -= weight;
+        diagonal_entry[j] -= weight;
+    }
+
+    // Unknowns with no known one-ring neighbour anywhere on their unknown
+    // island cannot be inpainted: keep plain interpolation there.
+    std::vector<std::int32_t> slot(count, -1);
+    {
+        std::vector<char> seen(count, 0);
+        std::vector<std::uint32_t> island, stack;
+        for (std::size_t start = 0; start < count; ++start) {
+            if (known[start] || seen[start]) continue;
+            island.clear();
+            stack.assign(1U, static_cast<std::uint32_t>(start));
+            seen[start] = 1;
+            bool anchored = false;
+            while (!stack.empty()) {
+                const auto vertex = stack.back();
+                stack.pop_back();
+                island.push_back(vertex);
+                for (const auto & [other, weight] : laplacian[vertex]) {
+                    (void) weight;
+                    if (known[other]) { anchored = true; continue; }
+                    if (!seen[other]) { seen[other] = 1; stack.push_back(other); }
+                }
+            }
+            bool solvable = anchored;
+            for (const auto vertex : island) solvable = solvable && mass[vertex] > 0.0;
+            if (!solvable) {
+                for (const auto vertex : island) {
+                    std::copy_n(raw.data() + vertex * joint_count, joint_count, robust.data() + vertex * joint_count);
+                    known[vertex] = 1;
+                }
+                output.transfer.fallback += island.size();
+            }
+        }
+    }
+    std::vector<std::uint32_t> unknown;
+    for (std::size_t vertex = 0; vertex < count; ++vertex)
+        if (!known[vertex]) {
+            slot[vertex] = static_cast<std::int32_t>(unknown.size());
+            unknown.push_back(static_cast<std::uint32_t>(vertex));
+        }
+    output.transfer.inpainted = unknown.size();
+
+    if (!unknown.empty()) {
+        // Rows of Q = -L + L M^-1 L for the unknowns, split into the unknown
+        // block A and the known block B.
+        const std::size_t u = unknown.size();
+        std::vector<std::size_t> row_start(u + 1U, 0U);
+        std::vector<std::uint32_t> a_column;
+        std::vector<double> a_value;
+        std::vector<std::vector<std::pair<std::uint32_t, double>>> b_rows(u);
+        std::vector<double> a_diagonal(u, 0.0);
+        std::vector<std::pair<std::uint32_t, double>> row;
+        for (std::size_t r = 0; r < u; ++r) {
+            const auto i = unknown[r];
+            row.clear();
+            const auto visit = [&](std::uint32_t j, double l_ij) {
+                row.emplace_back(j, -l_ij);
+                const double inverse_mass = mass[j] > 0.0 ? 1.0 / mass[j] : 0.0;
+                row.emplace_back(j, l_ij * diagonal_entry[j] * inverse_mass);
+                for (const auto & [k, l_jk] : laplacian[j]) row.emplace_back(k, l_ij * l_jk * inverse_mass);
+            };
+            visit(i, diagonal_entry[i]);
+            for (const auto & [j, l_ij] : laplacian[i]) visit(j, l_ij);
+            std::sort(row.begin(), row.end(), [](const auto & x, const auto & y) { return x.first < y.first; });
+            for (std::size_t index = 0; index < row.size();) {
+                const auto column = row[index].first;
+                double value = 0.0;
+                while (index < row.size() && row[index].first == column) value += row[index++].second;
+                if (value == 0.0) continue;
+                if (slot[column] >= 0) {
+                    a_column.push_back(static_cast<std::uint32_t>(slot[column]));
+                    a_value.push_back(value);
+                    if (column == i) a_diagonal[r] = value;
+                } else {
+                    b_rows[r].emplace_back(column, value);
+                }
+            }
+            row_start[r + 1U] = a_column.size();
+        }
+        const auto multiply = [&](const std::vector<double> & x, std::vector<double> & y) {
+            for (std::size_t r = 0; r < u; ++r) {
+                double value = 0.0;
+                for (std::size_t e = row_start[r]; e < row_start[r + 1U]; ++e) value += a_value[e] * x[a_column[e]];
+                y[r] = value;
+            }
+        };
+        std::vector<double> b(u), x(u), residual(u), z(u), direction(u), product(u);
+        for (std::size_t joint = 0; joint < joint_count; ++joint) {
+            double b_norm = 0.0;
+            for (std::size_t r = 0; r < u; ++r) {
+                double value = 0.0;
+                for (const auto & [column, q] : b_rows[r])
+                    value -= q * static_cast<double>(robust[column * joint_count + joint]);
+                b[r] = value;
+                b_norm += value * value;
+                x[r] = static_cast<double>(raw[unknown[r] * joint_count + joint]);
+            }
+            b_norm = std::sqrt(b_norm);
+            if (b_norm <= 1.0e-12) {
+                // No known neighbour carries this joint: it stays zero here.
+                for (std::size_t r = 0; r < u; ++r) robust[unknown[r] * joint_count + joint] = 0.0F;
+                continue;
+            }
+            ++output.transfer.solved_joints;
+            // Jacobi-preconditioned conjugate gradients, warm-started from the
+            // plain interpolation.
+            multiply(x, product);
+            double rz = 0.0;
+            for (std::size_t r = 0; r < u; ++r) {
+                residual[r] = b[r] - product[r];
+                z[r] = a_diagonal[r] > 0.0 ? residual[r] / a_diagonal[r] : residual[r];
+                direction[r] = z[r];
+                rz += residual[r] * z[r];
+            }
+            std::size_t iteration = 0U;
+            double relative = 0.0;
+            for (; iteration < options.max_iterations; ++iteration) {
+                double r_norm = 0.0;
+                for (const auto value : residual) r_norm += value * value;
+                relative = std::sqrt(r_norm) / b_norm;
+                if (relative <= options.tolerance) break;
+                multiply(direction, product);
+                double curvature = 0.0;
+                for (std::size_t r = 0; r < u; ++r) curvature += direction[r] * product[r];
+                if (!(curvature > 0.0)) break;
+                const double alpha = rz / curvature;
+                double next_rz = 0.0;
+                for (std::size_t r = 0; r < u; ++r) {
+                    x[r] += alpha * direction[r];
+                    residual[r] -= alpha * product[r];
+                    z[r] = a_diagonal[r] > 0.0 ? residual[r] / a_diagonal[r] : residual[r];
+                    next_rz += residual[r] * z[r];
+                }
+                const double beta = next_rz / rz;
+                rz = next_rz;
+                for (std::size_t r = 0; r < u; ++r) direction[r] = z[r] + beta * direction[r];
+            }
+            output.transfer.iterations = std::max(output.transfer.iterations, iteration);
+            output.transfer.residual = std::max(output.transfer.residual, static_cast<float>(relative));
+            for (std::size_t r = 0; r < u; ++r)
+                robust[unknown[r] * joint_count + joint] = static_cast<float>(x[r]);
+        }
+    }
+
+    // 5. Clamp, normalise, keep four; seam twins share their welded row.
+    for (std::size_t vertex = 0; vertex < count; ++vertex) {
+        float * values = robust.data() + vertex * joint_count;
+        double sum = 0.0;
+        for (std::size_t joint = 0; joint < joint_count; ++joint) {
+            values[joint] = std::isfinite(values[joint]) ? std::clamp(values[joint], 0.0F, 1.0F) : 0.0F;
+            sum += values[joint];
+        }
+        if (sum <= 1.0e-12) {
+            std::copy_n(raw.data() + vertex * joint_count, joint_count, values);
+            sum = 0.0;
+            for (std::size_t joint = 0; joint < joint_count; ++joint) sum += values[joint];
+        }
+        if (sum > 1.0e-12)
+            for (std::size_t joint = 0; joint < joint_count; ++joint)
+                values[joint] = static_cast<float>(values[joint] / sum);
+    }
+
+    // 5b. Smoothing. A vertex whose row differs sharply from its ring tears
+    // away from it when the joints move apart; each pass moves every row
+    // halfway to its ring's mean. Parts stay separate (rings never cross).
+    if (options.smooth_iterations > 0U) {
+        std::vector<float> next(robust.size());
+        for (std::size_t pass = 0; pass < options.smooth_iterations; ++pass) {
+            for (std::size_t vertex = 0; vertex < count; ++vertex) {
+                const float * self = robust.data() + vertex * joint_count;
+                float * out = next.data() + vertex * joint_count;
+                if (ring[vertex].empty()) { std::copy_n(self, joint_count, out); continue; }
+                const float k = 1.0F / static_cast<float>(ring[vertex].size());
+                for (std::size_t joint = 0; joint < joint_count; ++joint) {
+                    float mean = 0.0F;
+                    for (const auto other : ring[vertex]) mean += robust[other * joint_count + joint];
+                    out[joint] = 0.5F * self[joint] + 0.5F * mean * k;
+                }
+            }
+            robust.swap(next);
+        }
+    }
+
+    // 6. Part support. Each separate mesh part (a shoe, a glove, a hair card,
+    // or the whole body when it is one piece) keeps the joints reachable in
+    // the skeleton from its strongest joint through joints that carry at
+    // least `support_share` of the part's weight. A right shoe whose decoded
+    // weights pick up the left foot drops it: the left foot connects to the
+    // right foot only through hips and legs that carry nothing on that shoe.
+    // A connected body keeps everything, because its legs, hips and spine all
+    // carry weight (one empty joint in a row, such as a bare root, may be
+    // crossed). Parts never share an edge, so the cut cannot tear a seam.
+    if (options.support_share > 0.0F && target.parents.size() == joint_count) {
+        std::vector<std::vector<std::uint32_t>> bones(joint_count);
+        for (std::size_t joint = 0; joint < joint_count; ++joint) {
+            const auto parent = target.parents[joint];
+            if (parent < 0 || static_cast<std::size_t>(parent) >= joint_count) continue;
+            bones[joint].push_back(static_cast<std::uint32_t>(parent));
+            bones[static_cast<std::size_t>(parent)].push_back(static_cast<std::uint32_t>(joint));
+        }
+        std::vector<char> seen(count, 0), keep(joint_count, 0);
+        std::vector<std::uint8_t> gap(joint_count, 255U);
+        std::vector<std::uint32_t> part, stack, reach_queue;
+        std::vector<double> share(joint_count);
+        for (std::size_t start = 0; start < count; ++start) {
+            if (seen[start]) continue;
+            part.clear();
+            stack.assign(1U, static_cast<std::uint32_t>(start));
+            seen[start] = 1;
+            while (!stack.empty()) {
+                const auto at = stack.back();
+                stack.pop_back();
+                part.push_back(at);
+                for (const auto next : ring[at])
+                    if (!seen[next]) { seen[next] = 1; stack.push_back(next); }
+            }
+            std::fill(share.begin(), share.end(), 0.0);
+            double total = 0.0;
+            // Shares count vertices, not area: a fingertip is a sliver of a
+            // body's area but a fair share of its vertices.
+            for (const auto v : part) {
+                for (std::size_t joint = 0; joint < joint_count; ++joint)
+                    share[joint] += robust[v * joint_count + joint];
+                total += 1.0;
+            }
+            if (!(total > 0.0)) continue;
+            const auto strongest = static_cast<std::size_t>(std::max_element(share.begin(), share.end()) - share.begin());
+            // Breadth-first over the skeleton; `gap` counts the joints in a
+            // row below the share. One such joint may be crossed (a root or
+            // pelvis joint that carries nothing), two in a row may not.
+            std::fill(keep.begin(), keep.end(), 0);
+            std::fill(gap.begin(), gap.end(), 255U);
+            const double floor = static_cast<double>(options.support_share) * total;
+            keep[strongest] = 1;
+            gap[strongest] = 0U;
+            reach_queue.assign(1U, static_cast<std::uint32_t>(strongest));
+            for (std::size_t head = 0; head < reach_queue.size(); ++head) {
+                const auto at = reach_queue[head];
+                for (const auto next : bones[at]) {
+                    const std::uint8_t run = share[next] >= floor ? 0U : static_cast<std::uint8_t>(gap[at] + 1U);
+                    if (run > 1U || run >= gap[next]) continue;
+                    gap[next] = run;
+                    keep[next] = 1;
+                    reach_queue.push_back(next);
+                }
+            }
+            bool dropped = false;
+            for (std::size_t joint = 0; joint < joint_count; ++joint)
+                dropped = dropped || (!keep[joint] && share[joint] > 0.0);
+            if (!dropped) continue;
+            ++output.transfer.trimmed_parts;
+            for (const auto v : part) {
+                float * values = robust.data() + v * joint_count;
+                double kept = 0.0;
+                for (std::size_t joint = 0; joint < joint_count; ++joint) if (keep[joint]) kept += values[joint];
+                if (!(kept > 1.0e-6)) continue;
+                for (std::size_t joint = 0; joint < joint_count; ++joint)
+                    values[joint] = keep[joint] ? static_cast<float>(values[joint] / kept) : 0.0F;
+            }
+        }
+    }
+
+    for (std::size_t vertex = 0; vertex < n; ++vertex)
+        keep_four(robust.data() + static_cast<std::size_t>(welded_of[vertex]) * joint_count, joint_count,
+                  output.joints[vertex], output.weights[vertex]);
+    return output;
+}
+
+std::function<void(const transfer_inputs &)> & transfer_capture() {
+    static std::function<void(const transfer_inputs &)> value;
+    return value;
+}
+
+std::vector<std::byte> serialize_transfer_inputs(const transfer_inputs & value) {
+    std::vector<std::byte> out;
+    const auto put = [&](const void * data, std::size_t bytes) {
+        const auto * first = static_cast<const std::byte *>(data);
+        out.insert(out.end(), first, first + bytes);
+    };
+    const auto put_u32 = [&](std::size_t v) { const auto x = static_cast<std::uint32_t>(v); put(&x, 4U); };
+    put("STKT", 4U);
+    put_u32(1U);
+    put_u32(value.normalized_vertices.size());
+    put_u32(value.faces.size());
+    put_u32(value.sampled_points.size());
+    put_u32(value.dense_joint_weights.size());
+    put(value.normalized_vertices.data(), value.normalized_vertices.size_bytes());
+    put(value.vertex_normals.data(), value.vertex_normals.size_bytes());
+    put(value.faces.data(), value.faces.size_bytes());
+    put(value.sampled_points.data(), value.sampled_points.size_bytes());
+    put(value.sampled_normals.data(), value.sampled_normals.size_bytes());
+    put(value.sampled_faces.data(), value.sampled_faces.size_bytes());
+    for (const auto & column : value.dense_joint_weights) put(column.data(), column.size() * sizeof(float));
+    return out;
+}
+
+bool deserialize_transfer_inputs(std::span<const std::byte> bytes, transfer_inputs_storage & out) {
+    std::size_t at = 0U;
+    const auto take = [&](void * data, std::size_t size) {
+        if (at + size > bytes.size()) return false;
+        std::memcpy(data, bytes.data() + at, size);
+        at += size;
+        return true;
+    };
+    char magic[4]{};
+    std::uint32_t version = 0, n = 0, f = 0, s = 0, j = 0;
+    if (!take(magic, 4U) || std::memcmp(magic, "STKT", 4U) != 0) return false;
+    if (!take(&version, 4U) || version != 1U || !take(&n, 4U) || !take(&f, 4U) || !take(&s, 4U) || !take(&j, 4U)) return false;
+    out.normalized_vertices.resize(n); out.vertex_normals.resize(n); out.faces.resize(f);
+    out.sampled_points.resize(s); out.sampled_normals.resize(s); out.sampled_faces.resize(s);
+    out.dense_joint_weights.assign(j, std::vector<float>(s));
+    bool ok = take(out.normalized_vertices.data(), n * sizeof(vec3)) && take(out.vertex_normals.data(), n * sizeof(vec3)) &&
+              take(out.faces.data(), f * sizeof(triangle)) && take(out.sampled_points.data(), s * sizeof(vec3)) &&
+              take(out.sampled_normals.data(), s * sizeof(vec3)) && take(out.sampled_faces.data(), s * sizeof(std::uint32_t));
+    for (auto & column : out.dense_joint_weights) ok = ok && take(column.data(), s * sizeof(float));
+    return ok && at == bytes.size();
+}
 
 skin integrate_learned_binding(
     const skeleton & target,

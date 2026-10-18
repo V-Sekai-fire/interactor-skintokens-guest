@@ -685,6 +685,9 @@ void dump_binding_trace_if_requested(
         write(base.string() + ".final-dense.f32", final_dense_weights.data(), final_dense_weights.size_bytes());
 }
 
+template<class T>
+void dump_binary(const std::filesystem::path & path, std::span<const T> values);
+
 result<skin> decode_binding(const detail::weight_component & weights, ggml_backend_t backend,
                             const skeleton & target,
                             std::span<const std::int32_t> codes,
@@ -694,7 +697,10 @@ result<skin> decode_binding(const detail::weight_component & weights, ggml_backe
                             std::span<const vec3> normalized_vertices,
                             std::span<const triangle> faces,
                             std::span<const vec3> normalized_joints,
-                            bool surface_postprocess) {
+                            bool surface_postprocess,
+                            std::span<const vec3> vertex_normals,
+                            std::span<const std::uint32_t> sampled_faces,
+                            bool robust_transfer) {
     detail::profile_scope total_profile{"binding.decode.total"};
     if (codes.size() != target.names.size() * 4U)
         return std::unexpected(detail::fail(error_code::compute, "skin-code count does not match generated skeleton"));
@@ -717,6 +723,19 @@ result<skin> decode_binding(const detail::weight_component & weights, ggml_backe
         return value != nullptr && *value != '\0';
     }();
     detail::binding_trace trace;
+    const detail::transfer_inputs inputs{normalized_vertices, vertex_normals, faces, sampled_points,
+                                         sampled_normals, sampled_faces, dense};
+    if (const auto & capture = detail::transfer_capture()) capture(inputs);
+    if (const char * path = std::getenv("SKINTOKENS_DUMP_TRANSFER"); path != nullptr && *path != '\0') {
+        const auto bytes = detail::serialize_transfer_inputs(inputs);
+        dump_binary(path, std::span<const std::byte>{bytes});
+    }
+    if (robust_transfer && !surface_postprocess && !trace_binding) {
+        return detail::profiled("binding.decode.robust_transfer", [&] {
+            return detail::integrate_robust_binding(target, normalized_vertices, vertex_normals, faces,
+                sampled_points, sampled_normals, sampled_faces, dense);
+        });
+    }
     auto output = detail::profiled("binding.decode.cpu_integration", [&] {
         return surface_postprocess ?
             detail::integrate_postprocessed_binding(target, normalized_vertices, faces,
@@ -896,7 +915,8 @@ result<skin> model::rig(const mesh & source, const generation_options & options)
                                      (value.z-center.z)/scale});
     return decode_binding(*impl_->skin_vae_weights, impl_->backend->value, target,
         generated->skin_codes, *vae_condition, sampled->points, sampled->normals, normalized,
-        source.faces, normalized_joints, options.surface_postprocess);
+        source.faces, normalized_joints, options.surface_postprocess,
+        normals, sampled->faces, options.robust_transfer);
 }
 
 result<skin> model::bind(const mesh & source, const skeleton & target, const generation_options & options) const {
@@ -955,7 +975,8 @@ result<skin> model::bind(const mesh & source, const skeleton & target, const gen
     dump_token_trace_if_requested(prefix->tokens, codes);
     return decode_binding(*impl_->skin_vae_weights, impl_->backend->value, target,
         codes, *vae_condition, sampled->points, sampled->normals, prefix->normalized_vertices,
-        source.faces, prefix->normalized_joints, options.surface_postprocess);
+        source.faces, prefix->normalized_joints, options.surface_postprocess,
+        normals, sampled->faces, options.robust_transfer);
 }
 
 std::string_view model::backend_name() const noexcept {
