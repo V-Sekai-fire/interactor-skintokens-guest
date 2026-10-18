@@ -1,0 +1,36 @@
+#:schema https://www.schemastore.org/prek.json
+# Style gates. GitHub Actions runs them on every pull request and push to main
+# (.github/workflows/static_checks.yml); `prek install` runs the same set locally.
+# See https://prek.j178.dev.
+
+exclude = "^vendor/"
+
+[[repos]]
+repo = "https://github.com/pre-commit/mirrors-clang-format"
+rev = "v22.1.5"
+
+# Godot's .clang-format, which also sets InsertBraces: every block gets braces.
+[[repos.hooks]]
+id = "clang-format"
+files = '\.(c|h|cpp|hpp|cc|hh|cxx|hxx|inc)$'
+types_or = ["text"]
+
+[[repos]]
+repo = "local"
+
+# Name the type. `auto` is banned in C and C++ code; comments may still say the word.
+[[repos.hooks]]
+id = "no-auto"
+name = "no auto in C/C++"
+language = "pygrep"
+entry = '^(?!\s*//).*\bauto\b'
+files = '\.(c|h|cpp|hpp|cc|hh|cxx|hxx|inc)$'
+
+# JavaScript formatters have no braces switch, so ESLint's `curly: all` adds them.
+[[repos.hooks]]
+id = "eslint"
+name = "eslint (curly)"
+language = "node"
+entry = "eslint --fix"
+files = '\.(js|mjs|cjs)$'
+additional_dependencies = ["eslint@10.13.0"]

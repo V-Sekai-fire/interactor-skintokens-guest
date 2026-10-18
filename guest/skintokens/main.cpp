@@ -129,7 +129,7 @@ static bool load_model(const std::string &dir) {
 		}
 		return true;
 	};
-	auto m = skintokens::model::load(dir, rt);
+	skintokens::result<skintokens::model> m = skintokens::model::load(dir, rt);
 	if (!m) {
 		logf_("model load failed: %s", m.error().message.c_str());
 		return false;
@@ -144,12 +144,12 @@ static void rig_job(void *) {
 		pump::fail("skintokens: model load failed:\n" + g_log);
 	}
 	const std::vector<std::byte> glb = read_whole(g_job.mesh);
-	auto mesh = skintokens::load_glb_memory(glb);
+	skintokens::result<skintokens::mesh> mesh = skintokens::load_glb_memory(glb);
 	if (!mesh) {
 		pump::fail("skintokens: " + g_job.mesh + ": " + mesh.error().message);
 	}
 	logf_("mesh: %zu vertices, %zu faces", mesh->vertices.size(), mesh->faces.size());
-	auto binding = g_model->rig(*mesh, g_job.gen);
+	skintokens::result<skintokens::skin> binding = g_model->rig(*mesh, g_job.gen);
 	if (!binding) {
 		pump::fail("skintokens: rig failed: " + binding.error().message + "\n" + g_log);
 	}
@@ -161,7 +161,7 @@ static void rig_job(void *) {
 	rest.local_rotations.assign(rest.rig.names.size(), {});
 	// Rig the source GLB itself, so its materials, textures and UVs stay. A source that writer
 	// cannot take (buffer 0 not the binary chunk, no scene) gets the rebuilt one-material mesh.
-	auto bytes = skintokens::save_rigged_source_glb_memory(glb, *binding, rest);
+	skintokens::result<std::vector<std::byte>> bytes = skintokens::save_rigged_source_glb_memory(glb, *binding, rest);
 	if (!bytes) {
 		logf_("source GLB kept no materials: %s", bytes.error().message.c_str());
 		bytes = skintokens::save_skinned_animation_glb_memory(*mesh, *binding, rest);
@@ -171,7 +171,7 @@ static void rig_job(void *) {
 	}
 	g_result.assign(reinterpret_cast<const uint8_t *>(bytes->data()),
 			reinterpret_cast<const uint8_t *>(bytes->data()) + bytes->size());
-	const auto &t = binding->transfer;
+	const skintokens::skin::transfer_report &t = binding->transfer;
 	logf_("transfer: robust=%d welded=%zu matched=%zu outliers=%zu inpainted=%zu fallback=%zu trimmed_parts=%zu joints_solved=%zu iterations=%zu residual=%.1e",
 			int(t.robust), t.welded, t.matched, t.outliers, t.inpainted, t.fallback, t.trimmed_parts, t.solved_joints, t.iterations, double(t.residual));
 	logf_("rigged: %zu joints, %zu bytes", binding->rig.names.size(), g_result.size());
@@ -244,7 +244,7 @@ static Variant skintokens_start(String model_dir, String mesh_glb, String opts) 
 		} else if (k == "trace") {
 			if (v != "0") {
 				skintokens::detail::transfer_capture() = [](const skintokens::detail::transfer_inputs &in) {
-					const auto bytes = skintokens::detail::serialize_transfer_inputs(in);
+					const std::vector<std::byte> bytes = skintokens::detail::serialize_transfer_inputs(in);
 					g_trace.assign(reinterpret_cast<const uint8_t *>(bytes.data()),
 							reinterpret_cast<const uint8_t *>(bytes.data()) + bytes.size());
 				};
@@ -269,11 +269,11 @@ static Variant skintokens_start(String model_dir, String mesh_glb, String opts) 
 static std::string g_vrm;
 static void vrm_job(void *) {
 	const std::vector<std::byte> bytes = read_whole(g_vrm);
-	auto posed = skintokens::pose_to_t_pose_glb_memory(bytes);
+	skintokens::result<std::vector<std::byte>> posed = skintokens::pose_to_t_pose_glb_memory(bytes);
 	if (!posed) {
 		pump::fail("skintokens: T-pose: " + posed.error().message);
 	}
-	auto framed = skintokens::reframe_skin_joints_glb_memory(*posed);
+	skintokens::result<std::vector<std::byte>> framed = skintokens::reframe_skin_joints_glb_memory(*posed);
 	if (!framed) {
 		pump::fail("skintokens: joint frames: " + framed.error().message);
 	}
