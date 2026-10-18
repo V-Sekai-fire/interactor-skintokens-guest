@@ -16,6 +16,7 @@
 #include <iomanip>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <sstream>
 
 namespace skintokens {
@@ -291,6 +292,68 @@ vec3 cross(vec3 left, vec3 right) {
 }
 
 using matrix4 = std::array<float, 16>;
+
+quat q_mul(quat a, quat b) {
+    return {a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y, a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
+            a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w, a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z};
+}
+quat q_conj(quat a) { return {-a.x, -a.y, -a.z, a.w}; }
+quat q_norm(quat a) {
+    const float length = std::sqrt(a.x*a.x + a.y*a.y + a.z*a.z + a.w*a.w);
+    return length > 1e-12F ? quat{a.x/length, a.y/length, a.z/length, a.w/length} : quat{};
+}
+vec3 q_rotate(quat q, vec3 v) {
+    const quat r = q_mul(q_mul(q, {v.x, v.y, v.z, 0.0F}), q_conj(q));
+    return {r.x, r.y, r.z};
+}
+// A joint's rest in its parent's frame, given every joint's world rest rotation.
+quat rest_local_rotation(const skeleton & rig, const std::vector<quat> & frames, std::size_t joint) {
+    const std::int32_t parent = rig.parents[joint];
+    return parent < 0 ? frames[joint] : q_norm(q_mul(q_conj(frames[static_cast<std::size_t>(parent)]), frames[joint]));
+}
+vec3 rest_local_translation(const skeleton & rig, const std::vector<quat> & frames, std::size_t joint) {
+    const std::int32_t parent = rig.parents[joint];
+    if (parent < 0) return rig.rest_positions[joint];
+    const auto p = static_cast<std::size_t>(parent);
+    return q_rotate(q_conj(frames[p]), sub(rig.rest_positions[joint], rig.rest_positions[p]));
+}
+// A clip's local rotation (world-aligned rest frames) in the joint's own rest frames.
+quat framed_rotation(const skeleton & rig, const std::vector<quat> & frames, std::size_t joint, quat local) {
+    const std::int32_t parent = rig.parents[joint];
+    const quat parent_frame = parent < 0 ? quat{} : frames[static_cast<std::size_t>(parent)];
+    return q_norm(q_mul(q_mul(q_conj(parent_frame), local), frames[joint]));
+}
+std::array<float, 16> framed_inverse_bind(vec3 position, quat frame) {
+    const quat inverse = q_conj(frame);
+    const vec3 x = q_rotate(inverse, {1, 0, 0}), y = q_rotate(inverse, {0, 1, 0}), z = q_rotate(inverse, {0, 0, 1});
+    const vec3 t = q_rotate(inverse, {-position.x, -position.y, -position.z});
+    return {x.x, x.y, x.z, 0, y.x, y.y, y.z, 0, z.x, z.y, z.z, 0, t.x, t.y, t.z, 1};
+}
+// Rotation part of a column-major matrix, with any scale divided out.
+quat matrix_rotation(const std::array<float, 16> & m) {
+    vec3 c0{m[0], m[1], m[2]}, c1{m[4], m[5], m[6]}, c2{m[8], m[9], m[10]};
+    const auto len = [](vec3 v) { return std::sqrt(v.x*v.x + v.y*v.y + v.z*v.z); };
+    const float s0 = len(c0), s1 = len(c1), s2 = len(c2);
+    if (s0 < 1e-12F || s1 < 1e-12F || s2 < 1e-12F) return {};
+    const float a = c0.x/s0, b = c1.x/s1, c = c2.x/s2, d = c0.y/s0, e = c1.y/s1, f = c2.y/s2,
+                g = c0.z/s0, h = c1.z/s1, i = c2.z/s2;
+    quat q;
+    const float trace = a + e + i;
+    if (trace > 0.0F) {
+        const float t = std::sqrt(trace + 1.0F) * 2.0F;
+        q = {(h - f)/t, (c - g)/t, (d - b)/t, 0.25F*t};
+    } else if (a > e && a > i) {
+        const float t = std::sqrt(1.0F + a - e - i) * 2.0F;
+        q = {0.25F*t, (b + d)/t, (c + g)/t, (h - f)/t};
+    } else if (e > i) {
+        const float t = std::sqrt(1.0F + e - a - i) * 2.0F;
+        q = {(b + d)/t, 0.25F*t, (f + h)/t, (c - g)/t};
+    } else {
+        const float t = std::sqrt(1.0F + i - a - e) * 2.0F;
+        q = {(c + g)/t, (f + h)/t, 0.25F*t, (d - b)/t};
+    }
+    return q_norm(q);
+}
 
 matrix4 identity_matrix() {
     return {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
@@ -917,6 +980,18 @@ result<motion> load_skeleton_document(const document & doc, bool require_animati
             return std::unexpected(detail::fail(error_code::invalid_format, "animation has no bounded keyframes"));
         return output;
     }
+    std::vector<quat> own_rest(joint_count), parent_rest(joint_count);
+    for (std::size_t joint = 0; joint < joint_count; ++joint) {
+        const std::size_t node_index = joint_nodes[joint];
+        auto transform = global_transform(node_index);
+        if (!transform) return std::unexpected(transform.error());
+        own_rest[joint] = matrix_rotation(*transform);
+        if (node_parents[node_index] >= 0) {
+            auto parent = global_transform(static_cast<std::size_t>(node_parents[node_index]));
+            if (!parent) return std::unexpected(parent.error());
+            parent_rest[joint] = matrix_rotation(*parent);
+        }
+    }
     output.frames = frames;
     output.frames_per_second = duration > 0.0F ? static_cast<float>(frames - 1U) / duration : 30.0F;
     output.root_translations.assign(frames, output.rig.rest_positions[0]);
@@ -930,7 +1005,10 @@ result<motion> load_skeleton_document(const document & doc, bool require_animati
             } else if (value.path == "rotation") {
                 auto rotation = quaternion(value.values, frame);
                 if (!rotation) return std::unexpected(rotation.error());
-                output.local_rotations[frame * joint_count + value.node] = *rotation;
+                // Stored relative to world-aligned rest frames: a joint with a turned rest reads
+                // identity at rest, as the rest of the library expects.
+                output.local_rotations[frame * joint_count + value.node] =
+                    q_norm(q_mul(q_mul(parent_rest[value.node], *rotation), q_conj(own_rest[value.node])));
             }
         }
     }
@@ -938,6 +1016,51 @@ result<motion> load_skeleton_document(const document & doc, bool require_animati
 }
 
 } // namespace
+
+std::vector<quat> joint_rest_frames(const skeleton & rig) { return joint_rest_frames(rig, {}); }
+
+std::vector<quat> joint_rest_frames(const skeleton & rig, const std::vector<std::optional<vec3>> & aims) {
+    // Each joint's up (+Y) runs along its bone, toward the child that best continues the
+    // parent's direction; the side axes turn as little as possible from the parent's.
+    const std::size_t count = rig.names.size();
+    std::vector<quat> frames(count);
+    const auto length = [](vec3 v) { return std::sqrt(v.x*v.x + v.y*v.y + v.z*v.z); };
+    const auto dot = [](vec3 a, vec3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; };
+    for (std::size_t joint = 0; joint < count && joint < rig.parents.size() && joint < rig.rest_positions.size(); ++joint) {
+        const std::int32_t parent = rig.parents[joint];
+        const quat base = parent >= 0 && static_cast<std::size_t>(parent) < joint ? frames[static_cast<std::size_t>(parent)] : quat{};
+        const vec3 up = q_rotate(base, {0.0F, 1.0F, 0.0F});
+        vec3 best{};
+        float best_score = -2.0F;
+        for (std::size_t child = joint + 1U; child < count; ++child) {
+            if (rig.parents[child] != static_cast<std::int32_t>(joint)) continue;
+            const vec3 bone = sub(rig.rest_positions[child], rig.rest_positions[joint]);
+            const float bone_length = length(bone);
+            if (bone_length < 1e-6F) continue;
+            const vec3 direction{bone.x/bone_length, bone.y/bone_length, bone.z/bone_length};
+            const float score = dot(direction, up);
+            if (score > best_score) { best_score = score; best = direction; }
+        }
+        if (joint < aims.size() && aims[joint]) {
+            const vec3 bone = sub(*aims[joint], rig.rest_positions[joint]);
+            const float bone_length = length(bone);
+            if (bone_length > 1e-6F) { best = {bone.x/bone_length, bone.y/bone_length, bone.z/bone_length}; best_score = 0.0F; }
+        }
+        if (best_score < -1.5F) { frames[joint] = base; continue; }
+        quat turn;
+        const float cosine = std::clamp(dot(up, best), -1.0F, 1.0F);
+        if (cosine < -0.999999F) {
+            // Straight down from straight up: half a turn about the parent's forward axis.
+            const vec3 forward = q_rotate(base, {0.0F, 0.0F, 1.0F});
+            turn = {forward.x, forward.y, forward.z, 0.0F};
+        } else {
+            const vec3 axis = cross(up, best);
+            turn = q_norm({axis.x, axis.y, axis.z, 1.0F + cosine});
+        }
+        frames[joint] = q_norm(q_mul(turn, base));
+    }
+    return frames;
+}
 
 rig_kind identify_rig(const skeleton & value) {
     const auto has = [&](std::string_view wanted) {
@@ -1212,14 +1335,10 @@ result<std::vector<std::byte>> save_skinned_animation_glb_memory(
     for (const auto & face : geometry.faces) indices.insert(indices.end(), face.begin(), face.end());
     const auto index_accessor = builder.accessor_for<std::uint32_t>(indices, 5125U, "SCALAR", 34963U);
 
+    const std::vector<quat> frames = joint_rest_frames(binding.rig);
     std::vector<std::array<float, 16>> inverse_bind(joint_count);
-    for (std::size_t joint = 0; joint < joint_count; ++joint) {
-        auto & matrix = inverse_bind[joint];
-        matrix = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
-                  -binding.rig.rest_positions[joint].x,
-                  -binding.rig.rest_positions[joint].y,
-                  -binding.rig.rest_positions[joint].z, 1};
-    }
+    for (std::size_t joint = 0; joint < joint_count; ++joint)
+        inverse_bind[joint] = framed_inverse_bind(binding.rig.rest_positions[joint], frames[joint]);
     const auto inverse_accessor = builder.accessor_for<std::array<float, 16>>(inverse_bind, 5126U, "MAT4");
 
     std::vector<float> times(animation.frames);
@@ -1229,10 +1348,10 @@ result<std::vector<std::byte>> save_skinned_animation_glb_memory(
         json{{"min", {times.front()}}, {"max", {times.back()}}});
 
     for (std::size_t joint = 0; joint < joint_count; ++joint) {
-        const std::int32_t parent = binding.rig.parents[joint];
-        vec3 local = binding.rig.rest_positions[joint];
-        if (parent >= 0) local = sub(local, binding.rig.rest_positions[static_cast<std::size_t>(parent)]);
-        json node{{"name", binding.rig.names[joint]}, {"translation", {local.x, local.y, local.z}}};
+        const vec3 local = rest_local_translation(binding.rig, frames, joint);
+        const quat turn = rest_local_rotation(binding.rig, frames, joint);
+        json node{{"name", binding.rig.names[joint]}, {"translation", {local.x, local.y, local.z}},
+                  {"rotation", {turn.x, turn.y, turn.z, turn.w}}};
         json children = json::array();
         for (std::size_t child = 0; child < joint_count; ++child)
             if (binding.rig.parents[child] == static_cast<std::int32_t>(joint)) children.push_back(child);
@@ -1272,7 +1391,7 @@ result<std::vector<std::byte>> save_skinned_animation_glb_memory(
     for (std::size_t joint = 0; joint < joint_count; ++joint) {
         std::vector<quat> values(animation.frames);
         for (std::size_t frame = 0; frame < animation.frames; ++frame)
-            values[frame] = animation.local_rotations[frame * joint_count + joint];
+            values[frame] = framed_rotation(binding.rig, frames, joint, animation.local_rotations[frame * joint_count + joint]);
         const auto output_accessor = builder.accessor_for<quat>(values, 5126U, "VEC4");
         const auto sampler = samplers.size();
         samplers.push_back({{"input", time_accessor}, {"output", output_accessor}, {"interpolation", "LINEAR"}});
@@ -1652,11 +1771,12 @@ result<std::vector<std::byte>> save_rigged_source_glb_memory(
     if (base != geometry->vertices.size())
         return std::unexpected(detail::fail(error_code::invalid_format, "source walk does not match the loaded mesh"));
 
+    const std::vector<quat> frames = joint_rest_frames(binding.rig);
     for (std::size_t joint = 0; joint < joint_count; ++joint) {
-        const std::int32_t parent = binding.rig.parents[joint];
-        vec3 local = binding.rig.rest_positions[joint];
-        if (parent >= 0) local = sub(local, binding.rig.rest_positions[static_cast<std::size_t>(parent)]);
-        json node{{"name", binding.rig.names[joint]}, {"translation", {local.x, local.y, local.z}}};
+        const vec3 local = rest_local_translation(binding.rig, frames, joint);
+        const quat turn = rest_local_rotation(binding.rig, frames, joint);
+        json node{{"name", binding.rig.names[joint]}, {"translation", {local.x, local.y, local.z}},
+                  {"rotation", {turn.x, turn.y, turn.z, turn.w}}};
         json children = json::array();
         for (std::size_t child = 0; child < joint_count; ++child)
             if (binding.rig.parents[child] == static_cast<std::int32_t>(joint)) children.push_back(joint_base + child);
@@ -1668,9 +1788,7 @@ result<std::vector<std::byte>> save_rigged_source_glb_memory(
 
     std::vector<std::array<float, 16>> inverse_bind(joint_count);
     for (std::size_t joint = 0; joint < joint_count; ++joint)
-        inverse_bind[joint] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
-                               -binding.rig.rest_positions[joint].x, -binding.rig.rest_positions[joint].y,
-                               -binding.rig.rest_positions[joint].z, 1};
+        inverse_bind[joint] = framed_inverse_bind(binding.rig.rest_positions[joint], frames[joint]);
     json skin_object{{"name", binding.learned ? "SkinTokens learned binding" : "Geometric baseline binding"},
                      {"inverseBindMatrices", builder.accessor_for<std::array<float, 16>>(inverse_bind, 5126U, "MAT4")},
                      {"skeleton", joint_base}, {"joints", json::array()}};
@@ -1690,7 +1808,7 @@ result<std::vector<std::byte>> save_rigged_source_glb_memory(
     for (std::size_t joint = 0; joint < joint_count; ++joint) {
         std::vector<quat> values(animation.frames);
         for (std::size_t frame = 0; frame < animation.frames; ++frame)
-            values[frame] = animation.local_rotations[frame * joint_count + joint];
+            values[frame] = framed_rotation(binding.rig, frames, joint, animation.local_rotations[frame * joint_count + joint]);
         const auto sampler = samplers.size();
         samplers.push_back({{"input", time_accessor}, {"output", builder.accessor_for<quat>(values, 5126U, "VEC4")},
                             {"interpolation", "LINEAR"}});
@@ -1753,6 +1871,23 @@ result<std::vector<std::byte>> add_animation_glb_memory(
             return std::unexpected(detail::fail(error_code::invalid_argument, "clip joint is not in the skin: " + animation.rig.names[joint]));
         targets[joint] = found;
     }
+    // Each node's world rest rotation: the clip's rotations are turned into the joints' own frames.
+    std::vector<std::int32_t> node_parent(root["nodes"].size(), -1);
+    for (std::size_t node = 0; node < root["nodes"].size(); ++node)
+        for (const auto & child : root["nodes"][node].value("children", json::array()))
+            if (child.is_number_unsigned() && child.get<std::size_t>() < node_parent.size())
+                node_parent[child.get<std::size_t>()] = static_cast<std::int32_t>(node);
+    std::function<quat(std::int32_t, int)> world_rest = [&](std::int32_t node, int depth) -> quat {
+        if (node < 0 || depth > 4096) return quat{};
+        auto local = node_matrix(root["nodes"][static_cast<std::size_t>(node)]);
+        const quat own = local ? matrix_rotation(*local) : quat{};
+        return q_norm(q_mul(world_rest(node_parent[static_cast<std::size_t>(node)], depth + 1), own));
+    };
+    std::vector<quat> own_frame(joint_count), parent_frame(joint_count);
+    for (std::size_t joint = 0; joint < joint_count; ++joint) {
+        own_frame[joint] = world_rest(static_cast<std::int32_t>(targets[joint]), 0);
+        parent_frame[joint] = world_rest(node_parent[targets[joint]], 0);
+    }
     std::vector<float> times(animation.frames);
     const float fps = animation.frames_per_second > 0.0F ? animation.frames_per_second : 30.0F;
     for (std::size_t frame = 0; frame < animation.frames; ++frame) times[frame] = static_cast<float>(frame) / fps;
@@ -1766,7 +1901,8 @@ result<std::vector<std::byte>> add_animation_glb_memory(
     for (std::size_t joint = 0; joint < joint_count; ++joint) {
         std::vector<quat> values(animation.frames);
         for (std::size_t frame = 0; frame < animation.frames; ++frame)
-            values[frame] = animation.local_rotations[frame * joint_count + joint];
+            values[frame] = q_norm(q_mul(q_mul(q_conj(parent_frame[joint]),
+                animation.local_rotations[frame * joint_count + joint]), own_frame[joint]));
         const auto sampler = samplers.size();
         samplers.push_back({{"input", time_accessor}, {"output", builder.accessor_for<quat>(values, 5126U, "VEC4")},
                             {"interpolation", "LINEAR"}});
@@ -1778,6 +1914,457 @@ result<std::vector<std::byte>> add_animation_glb_memory(
     for (auto & clip : root.value("animations", json::array()))
         if (clip.value("name", std::string{}) != name) clips.push_back(clip);
     root["animations"] = std::move(clips);
+    align4(builder.binary);
+    root["buffers"][0]["byteLength"] = builder.binary.size();
+    return pack_glb(builder);
+}
+
+namespace {
+matrix4 rigid_matrix(vec3 t, quat q) {
+    const vec3 x = q_rotate(q, {1, 0, 0}), y = q_rotate(q, {0, 1, 0}), z = q_rotate(q, {0, 0, 1});
+    return {x.x, x.y, x.z, 0, y.x, y.y, y.z, 0, z.x, z.y, z.z, 0, t.x, t.y, t.z, 1};
+}
+matrix4 rigid_inverse(const matrix4 & m) {
+    // m = [R | t] with R a rotation: inverse = [R^T | -R^T t]
+    matrix4 out{m[0], m[4], m[8], 0, m[1], m[5], m[9], 0, m[2], m[6], m[10], 0, 0, 0, 0, 1};
+    out[12] = -(out[0]*m[12] + out[4]*m[13] + out[8]*m[14]);
+    out[13] = -(out[1]*m[12] + out[5]*m[13] + out[9]*m[14]);
+    out[14] = -(out[2]*m[12] + out[6]*m[13] + out[10]*m[14]);
+    return out;
+}
+matrix4 general_inverse(const matrix4 & m) {
+    // affine inverse: [A | t] -> [A^-1 | -A^-1 t]
+    const float a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], i = m[10];
+    const float det = a*(e*i - f*h) - b*(d*i - f*g) + c*(d*h - e*g);
+    const float k = std::abs(det) > 1e-30F ? 1.0F/det : 0.0F;
+    matrix4 out{(e*i - f*h)*k, (f*g - d*i)*k, (d*h - e*g)*k, 0, (c*h - b*i)*k, (a*i - c*g)*k, (b*g - a*h)*k, 0,
+                (b*f - c*e)*k, (c*d - a*f)*k, (a*e - b*d)*k, 0, 0, 0, 0, 1};
+    out[12] = -(out[0]*m[12] + out[4]*m[13] + out[8]*m[14]);
+    out[13] = -(out[1]*m[12] + out[5]*m[13] + out[9]*m[14]);
+    out[14] = -(out[2]*m[12] + out[6]*m[13] + out[10]*m[14]);
+    return out;
+}
+void write_trs(json & node, const matrix4 & m) {
+    const vec3 c0{m[0], m[1], m[2]}, c1{m[4], m[5], m[6]}, c2{m[8], m[9], m[10]};
+    const auto len = [](vec3 v) { return std::sqrt(v.x*v.x + v.y*v.y + v.z*v.z); };
+    const quat r = matrix_rotation(m);
+    node.erase("matrix");
+    node["translation"] = {m[12], m[13], m[14]};
+    node["rotation"] = {r.x, r.y, r.z, r.w};
+    const float s0 = len(c0), s1 = len(c1), s2 = len(c2);
+    if (std::abs(s0 - 1.0F) > 1e-5F || std::abs(s1 - 1.0F) > 1e-5F || std::abs(s2 - 1.0F) > 1e-5F)
+        node["scale"] = {s0, s1, s2};
+    else
+        node.erase("scale");
+}
+} // namespace
+
+result<std::vector<std::byte>> reframe_skin_joints_glb_memory(std::span<const std::byte> bytes) {
+    auto doc = parse_document(bytes);
+    if (!doc) return std::unexpected(doc.error());
+    glb_builder builder;
+    builder.root = doc->root;
+    builder.binary = doc->binary;
+    json & root = builder.root;
+    if (!root.contains("skins") || !root["skins"].is_array() || root["skins"].empty() || !root.contains("nodes"))
+        return std::unexpected(detail::fail(error_code::invalid_format, "GLB has no skin to re-frame"));
+    if (!root.contains("buffers") || root["buffers"].empty() || root["buffers"][0].contains("uri"))
+        return std::unexpected(detail::fail(error_code::invalid_format, "GLB has no binary chunk"));
+    json & nodes = root["nodes"];
+    const std::size_t count = nodes.size();
+    std::vector<std::int32_t> parent(count, -1);
+    for (std::size_t n = 0; n < count; ++n)
+        for (const auto & child : nodes[n].value("children", json::array()))
+            if (child.is_number_unsigned() && child.get<std::size_t>() < count) parent[child.get<std::size_t>()] = static_cast<std::int32_t>(n);
+    std::vector<matrix4> world(count);
+    std::vector<std::uint8_t> state(count, 0U);
+    std::function<result<matrix4>(std::size_t)> world_of = [&](std::size_t n) -> result<matrix4> {
+        if (state[n] == 2U) return world[n];
+        if (state[n] == 1U) return std::unexpected(detail::fail(error_code::invalid_format, "node hierarchy contains a cycle"));
+        state[n] = 1U;
+        auto local = node_matrix(nodes[n]);
+        if (!local) return std::unexpected(local.error());
+        if (parent[n] < 0) world[n] = *local;
+        else {
+            auto up = world_of(static_cast<std::size_t>(parent[n]));
+            if (!up) return std::unexpected(up.error());
+            world[n] = multiply(*up, *local);
+        }
+        state[n] = 2U;
+        return world[n];
+    };
+    for (std::size_t n = 0; n < count; ++n) if (auto w = world_of(n); !w) return std::unexpected(w.error());
+
+    std::vector<std::uint8_t> is_joint(count, 0U), keep_frame(count, 0U);
+    for (const auto & skin_value : root["skins"])
+        for (const auto & joint : skin_value.value("joints", json::array()))
+            if (joint.is_number_unsigned() && joint.get<std::size_t>() < count) is_joint[joint.get<std::size_t>()] = 1U;
+    // A node constraint states its axes in the node's own frame: those nodes keep their frame.
+    for (std::size_t n = 0; n < count; ++n) {
+        auto ext = nodes[n].find("extensions");
+        if (ext == nodes[n].end() || !ext->contains("VRMC_node_constraint")) continue;
+        keep_frame[n] = 1U;
+        const json & constraint = (*ext)["VRMC_node_constraint"].value("constraint", json::object());
+        for (const auto & [kind, body] : constraint.items())
+            if (body.contains("source") && body["source"].is_number_unsigned() && body["source"].get<std::size_t>() < count)
+                keep_frame[body["source"].get<std::size_t>()] = 1U;
+    }
+    // The joints as a skeleton, parents first, each joint's parent the nearest joint above it.
+    std::vector<std::size_t> order;
+    std::vector<std::int32_t> slot(count, -1);
+    std::function<void(std::size_t)> visit = [&](std::size_t n) {
+        if (is_joint[n]) { slot[n] = static_cast<std::int32_t>(order.size()); order.push_back(n); }
+        for (const auto & child : nodes[n].value("children", json::array()))
+            if (child.is_number_unsigned() && child.get<std::size_t>() < count) visit(child.get<std::size_t>());
+    };
+    for (std::size_t n = 0; n < count; ++n) if (parent[n] < 0) visit(n);
+    skeleton rig;
+    for (std::size_t s = 0; s < order.size(); ++s) {
+        const std::size_t n = order[s];
+        const matrix4 & w = world[n];
+        const auto len = [](float a, float b, float c) { return std::sqrt(a*a + b*b + c*c); };
+        if (std::abs(len(w[0], w[1], w[2]) - 1.0F) > 1e-3F || std::abs(len(w[4], w[5], w[6]) - 1.0F) > 1e-3F ||
+            std::abs(len(w[8], w[9], w[10]) - 1.0F) > 1e-3F)
+            return std::unexpected(detail::fail(error_code::invalid_format, "a scaled joint cannot be re-framed: " + nodes[n].value("name", std::string{})));
+        std::int32_t up = parent[n];
+        while (up >= 0 && !is_joint[static_cast<std::size_t>(up)]) up = parent[static_cast<std::size_t>(up)];
+        rig.names.push_back(nodes[n].value("name", std::string{}));
+        rig.parents.push_back(up < 0 ? -1 : slot[static_cast<std::size_t>(up)]);
+        rig.rest_positions.push_back({w[12], w[13], w[14]});
+    }
+    // A VRM humanoid bone aims at the next humanoid bone of its chain, even past twist or skirt
+    // bones in between.
+    std::vector<std::optional<vec3>> aims(order.size());
+    if (auto ext = root.find("extensions"); ext != root.end() && ext->contains("VRMC_vrm")) {
+        const json bones = (*ext)["VRMC_vrm"].value("humanoid", json::object()).value("humanBones", json::object());
+        const auto node_of = [&](const std::string & name) -> std::int32_t {
+            if (!bones.contains(name)) return -1;
+            const std::size_t n = bones[name].value("node", count);
+            return n < count ? static_cast<std::int32_t>(n) : -1;
+        };
+        std::vector<std::pair<std::string, std::vector<std::string>>> chains = {
+            {"hips", {"spine"}}, {"spine", {"chest", "upperChest", "neck"}}, {"chest", {"upperChest", "neck"}},
+            {"upperChest", {"neck"}}, {"neck", {"head"}}};
+        for (const std::string side : {"left", "right"}) {
+            chains.push_back({side + "Shoulder", {side + "UpperArm"}});
+            chains.push_back({side + "UpperArm", {side + "LowerArm"}});
+            chains.push_back({side + "LowerArm", {side + "Hand"}});
+            chains.push_back({side + "Hand", {side + "MiddleProximal"}});
+            chains.push_back({side + "UpperLeg", {side + "LowerLeg"}});
+            chains.push_back({side + "LowerLeg", {side + "Foot"}});
+            chains.push_back({side + "Foot", {side + "Toes"}});
+            chains.push_back({side + "ThumbMetacarpal", {side + "ThumbProximal"}});
+            chains.push_back({side + "ThumbProximal", {side + "ThumbDistal"}});
+            for (const std::string finger : {"Index", "Middle", "Ring", "Little"}) {
+                chains.push_back({side + finger + "Proximal", {side + finger + "Intermediate"}});
+                chains.push_back({side + finger + "Intermediate", {side + finger + "Distal"}});
+            }
+        }
+        for (const auto & [from, to] : chains) {
+            const std::int32_t a = node_of(from);
+            if (a < 0 || slot[static_cast<std::size_t>(a)] < 0) continue;
+            for (const auto & next : to) {
+                const std::int32_t b = node_of(next);
+                if (b < 0) continue;
+                const matrix4 & w = world[static_cast<std::size_t>(b)];
+                aims[static_cast<std::size_t>(slot[static_cast<std::size_t>(a)])] = vec3{w[12], w[13], w[14]};
+                break;
+            }
+        }
+    }
+    const std::vector<quat> frames = joint_rest_frames(rig, aims);
+    // New world rest of every node; delta[n] = old^-1 * new is a pure rotation.
+    std::vector<matrix4> renewed = world;
+    std::vector<quat> delta(count);
+    for (std::size_t s = 0; s < order.size(); ++s) {
+        const std::size_t n = order[s];
+        if (keep_frame[n]) continue;
+        renewed[n] = rigid_matrix(rig.rest_positions[s], frames[s]);
+        delta[n] = q_norm(q_mul(q_conj(matrix_rotation(world[n])), frames[s]));
+    }
+    for (std::size_t n = 0; n < count; ++n) {
+        if (!is_joint[n] && (parent[n] < 0 || !is_joint[static_cast<std::size_t>(parent[n])])) continue;
+        const matrix4 local = parent[n] < 0 ? renewed[n] : multiply(general_inverse(renewed[static_cast<std::size_t>(parent[n])]), renewed[n]);
+        write_trs(nodes[n], local);
+    }
+    // Inverse binds: new = new_world^-1 * old_world * old_inverse_bind, so skinning is unchanged.
+    for (auto & skin_value : root["skins"]) {
+        const auto & joints = skin_value.value("joints", json::array());
+        std::vector<std::array<float, 16>> binds(joints.size());
+        std::optional<accessor> old_binds;
+        if (skin_value.contains("inverseBindMatrices") && skin_value["inverseBindMatrices"].is_number_unsigned()) {
+            auto read = get_accessor(*doc, skin_value["inverseBindMatrices"].get<std::size_t>());
+            if (!read) return std::unexpected(read.error());
+            if (read->count != joints.size()) return std::unexpected(detail::fail(error_code::invalid_format, "inverse binds do not match the joints"));
+            old_binds = *read;
+        }
+        for (std::size_t j = 0; j < joints.size(); ++j) {
+            const std::size_t n = joints[j].get<std::size_t>();
+            matrix4 old = identity_matrix();
+            if (old_binds) {
+                if (old_binds->component != 5126U || old_binds->shape != "MAT4")
+                    return std::unexpected(detail::fail(error_code::invalid_format, "inverse binds must be float MAT4"));
+                for (std::size_t k = 0; k < 16U; ++k)
+                    old[k] = little<float>(old_binds->bytes.data() + j * old_binds->stride + k * 4U);
+            }
+            binds[j] = multiply(multiply(rigid_inverse(renewed[n]), world[n]), old);
+        }
+        skin_value["inverseBindMatrices"] = builder.accessor_for<std::array<float, 16>>(binds, 5126U, "MAT4");
+    }
+    // Clips: local'(t) = delta[parent]^-1 * local(t) * delta[node].
+    if (root.contains("animations")) {
+        for (auto & clip : root["animations"]) {
+            for (auto & channel : clip["channels"]) {
+                const std::size_t n = channel["target"].value("node", count);
+                if (n >= count) continue;
+                const quat own = delta[n];
+                const quat above = parent[n] < 0 ? quat{} : delta[static_cast<std::size_t>(parent[n])];
+                if (own.x == 0.0F && own.y == 0.0F && own.z == 0.0F && above.x == 0.0F && above.y == 0.0F && above.z == 0.0F) continue;
+                const std::string path = channel["target"].value("path", std::string{});
+                json & sampler = clip["samplers"][channel["sampler"].get<std::size_t>()];
+                auto values = get_accessor(*doc, sampler["output"].get<std::size_t>());
+                if (!values) return std::unexpected(values.error());
+                if (path == "rotation") {
+                    std::vector<quat> out(values->count);
+                    for (std::size_t i = 0; i < values->count; ++i) {
+                        auto q = quaternion(*values, i);
+                        if (!q) return std::unexpected(q.error());
+                        out[i] = q_norm(q_mul(q_mul(q_conj(above), *q), own));
+                    }
+                    sampler["output"] = builder.accessor_for<quat>(out, 5126U, "VEC4");
+                } else if (path == "translation") {
+                    std::vector<vec3> out(values->count);
+                    for (std::size_t i = 0; i < values->count; ++i) {
+                        auto v = vector3(*values, i);
+                        if (!v) return std::unexpected(v.error());
+                        out[i] = q_rotate(q_conj(above), *v);
+                    }
+                    sampler["output"] = builder.accessor_for<vec3>(out, 5126U, "VEC3");
+                } else if (path == "scale") {
+                    return std::unexpected(detail::fail(error_code::invalid_format, "a scaled clip cannot be re-framed"));
+                }
+            }
+        }
+    }
+    // Offsets stated in a node's own frame move with it: spring-bone colliders, the look-at origin.
+    const auto refit = [&](json & value, std::size_t n) {
+        if (!value.is_array() || value.size() != 3U || n >= count) return;
+        const vec3 v{value[0].get<float>(), value[1].get<float>(), value[2].get<float>()};
+        const vec3 moved = q_rotate(q_conj(delta[n]), v);
+        value = {moved.x, moved.y, moved.z};
+    };
+    if (auto ext = root.find("extensions"); ext != root.end()) {
+        if (ext->contains("VRMC_springBone"))
+            for (auto & collider : (*ext)["VRMC_springBone"]["colliders"]) {
+                const std::size_t n = collider.value("node", count);
+                for (auto & [kind, shape] : collider["shape"].items()) {
+                    if (shape.contains("offset")) refit(shape["offset"], n);
+                    if (shape.contains("tail")) refit(shape["tail"], n);
+                }
+            }
+        if (ext->contains("VRMC_vrm")) {
+            json & vrm = (*ext)["VRMC_vrm"];
+            const json bones = vrm.value("humanoid", json::object()).value("humanBones", json::object());
+            if (bones.contains("head") && vrm.contains("lookAt") && vrm["lookAt"].contains("offsetFromHeadBone"))
+                refit(vrm["lookAt"]["offsetFromHeadBone"], bones["head"].value("node", count));
+        }
+    }
+    align4(builder.binary);
+    root["buffers"][0]["byteLength"] = builder.binary.size();
+    return pack_glb(builder);
+}
+
+result<std::vector<std::byte>> pose_to_t_pose_glb_memory(std::span<const std::byte> bytes) {
+    auto doc = parse_document(bytes);
+    if (!doc) return std::unexpected(doc.error());
+    glb_builder builder;
+    builder.root = doc->root;
+    builder.binary = doc->binary;
+    json & root = builder.root;
+    auto ext = root.find("extensions");
+    if (ext == root.end() || !ext->contains("VRMC_vrm"))
+        return std::unexpected(detail::fail(error_code::invalid_format, "a T-pose needs a VRM 1.0 humanoid"));
+    if (root.contains("animations") && !root["animations"].empty())
+        return std::unexpected(detail::fail(error_code::invalid_format, "a file with clips cannot change its rest pose"));
+    if (!root.contains("buffers") || root["buffers"].empty() || root["buffers"][0].contains("uri"))
+        return std::unexpected(detail::fail(error_code::invalid_format, "GLB has no binary chunk"));
+    json & nodes = root["nodes"];
+    const std::size_t count = nodes.size();
+    std::vector<std::int32_t> parent(count, -1);
+    for (std::size_t n = 0; n < count; ++n)
+        for (const auto & child : nodes[n].value("children", json::array()))
+            if (child.is_number_unsigned() && child.get<std::size_t>() < count) parent[child.get<std::size_t>()] = static_cast<std::int32_t>(n);
+    std::vector<matrix4> world(count);
+    std::vector<std::uint8_t> state(count, 0U);
+    std::function<result<matrix4>(std::size_t)> world_of = [&](std::size_t n) -> result<matrix4> {
+        if (state[n] == 2U) return world[n];
+        if (state[n] == 1U) return std::unexpected(detail::fail(error_code::invalid_format, "node hierarchy contains a cycle"));
+        state[n] = 1U;
+        auto local = node_matrix(nodes[n]);
+        if (!local) return std::unexpected(local.error());
+        if (parent[n] < 0) world[n] = *local;
+        else {
+            auto up = world_of(static_cast<std::size_t>(parent[n]));
+            if (!up) return std::unexpected(up.error());
+            world[n] = multiply(*up, *local);
+        }
+        state[n] = 2U;
+        return world[n];
+    };
+    for (std::size_t n = 0; n < count; ++n) if (auto w = world_of(n); !w) return std::unexpected(w.error());
+    const json bones = (*ext)["VRMC_vrm"].value("humanoid", json::object()).value("humanBones", json::object());
+    const auto node_of = [&](const std::string & name) -> std::int32_t {
+        if (!bones.contains(name)) return -1;
+        const std::size_t n = bones[name].value("node", count);
+        return n < count ? static_cast<std::int32_t>(n) : -1;
+    };
+    // T-pose (VRM 1.0): facing +Z, the left arm and its fingers along +X, the right along -X,
+    // the legs straight down. Spine, neck, head, feet and thumbs keep their pose.
+    struct aim { std::string from; std::vector<std::string> to; vec3 direction; };
+    std::vector<aim> aims;
+    for (const std::string side : {"left", "right"}) {
+        const vec3 out{side == "left" ? 1.0F : -1.0F, 0.0F, 0.0F};
+        aims.push_back({side + "Shoulder", {side + "UpperArm"}, out});
+        aims.push_back({side + "UpperArm", {side + "LowerArm"}, out});
+        aims.push_back({side + "LowerArm", {side + "Hand"}, out});
+        aims.push_back({side + "Hand", {side + "MiddleProximal"}, out});
+        for (const std::string finger : {"Index", "Middle", "Ring", "Little"}) {
+            aims.push_back({side + finger + "Proximal", {side + finger + "Intermediate"}, out});
+            aims.push_back({side + finger + "Intermediate", {side + finger + "Distal"}, out});
+        }
+        aims.push_back({side + "UpperLeg", {side + "LowerLeg"}, {0.0F, -1.0F, 0.0F}});
+        aims.push_back({side + "LowerLeg", {side + "Foot"}, {0.0F, -1.0F, 0.0F}});
+    }
+    std::vector<std::vector<std::size_t>> children(count);
+    for (std::size_t n = 0; n < count; ++n) if (parent[n] >= 0) children[static_cast<std::size_t>(parent[n])].push_back(n);
+    std::vector<matrix4> posed = world;
+    const auto dot = [](vec3 a, vec3 b) { return a.x*b.x + a.y*b.y + a.z*b.z; };
+    for (const auto & item : aims) {
+        const std::int32_t a = node_of(item.from);
+        std::int32_t b = -1;
+        for (const auto & next : item.to) if ((b = node_of(next)) >= 0) break;
+        if (a < 0 || b < 0) continue;
+        const matrix4 & wa = posed[static_cast<std::size_t>(a)];
+        const matrix4 & wb = posed[static_cast<std::size_t>(b)];
+        vec3 bone{wb[12] - wa[12], wb[13] - wa[13], wb[14] - wa[14]};
+        const float length = std::sqrt(dot(bone, bone));
+        if (length < 1e-6F) continue;
+        bone = {bone.x/length, bone.y/length, bone.z/length};
+        const float cosine = std::clamp(dot(bone, item.direction), -1.0F, 1.0F);
+        quat turn;
+        if (cosine < -0.999999F) turn = {0.0F, 0.0F, 1.0F, 0.0F};
+        else { const vec3 axis = cross(bone, item.direction); turn = q_norm({axis.x, axis.y, axis.z, 1.0F + cosine}); }
+        // Turn the bone and everything below it about the bone's own joint.
+        const vec3 pivot{wa[12], wa[13], wa[14]};
+        const matrix4 about = multiply(rigid_matrix(pivot, turn), rigid_matrix({-pivot.x, -pivot.y, -pivot.z}, quat{}));
+        std::vector<std::size_t> stack{static_cast<std::size_t>(a)};
+        while (!stack.empty()) {
+            const std::size_t n = stack.back(); stack.pop_back();
+            posed[n] = multiply(about, posed[n]);
+            for (auto c : children[n]) stack.push_back(c);
+        }
+    }
+    for (std::size_t n = 0; n < count; ++n) {
+        if (posed[n] == world[n]) continue;
+        const matrix4 local = parent[n] < 0 ? posed[n] : multiply(general_inverse(posed[static_cast<std::size_t>(parent[n])]), posed[n]);
+        write_trs(nodes[n], local);
+    }
+    // Bake the pose into each skinned mesh (linear blend skinning, as a renderer would), then bind
+    // it at the new rest: new inverse bind = new joint world^-1, vertices in world space.
+    std::vector<std::uint8_t> rebound(root["skins"].size(), 0U);
+    for (std::size_t n = 0; n < count; ++n) {
+        if (!nodes[n].contains("mesh") || !nodes[n].contains("skin")) continue;
+        const std::size_t skin_index = nodes[n]["skin"].get<std::size_t>();
+        json & skin_value = root["skins"][skin_index];
+        const auto & joints = skin_value["joints"];
+        std::vector<matrix4> skinning(joints.size());
+        std::optional<accessor> binds;
+        if (skin_value.contains("inverseBindMatrices")) {
+            auto read = get_accessor(*doc, skin_value["inverseBindMatrices"].get<std::size_t>());
+            if (!read) return std::unexpected(read.error());
+            binds = *read;
+        }
+        for (std::size_t j = 0; j < joints.size(); ++j) {
+            matrix4 old = identity_matrix();
+            if (binds) for (std::size_t k = 0; k < 16U; ++k) old[k] = little<float>(binds->bytes.data() + j * binds->stride + k * 4U);
+            skinning[j] = multiply(posed[joints[j].get<std::size_t>()], old);
+        }
+        json & mesh_value = root["meshes"][nodes[n]["mesh"].get<std::size_t>()];
+        for (auto & primitive : mesh_value["primitives"]) {
+            json & attributes = primitive["attributes"];
+            if (!attributes.contains("JOINTS_0") || !attributes.contains("WEIGHTS_0") || !attributes.contains("POSITION")) continue;
+            auto joint_values = get_accessor(*doc, attributes["JOINTS_0"].get<std::size_t>());
+            auto weight_values = get_accessor(*doc, attributes["WEIGHTS_0"].get<std::size_t>());
+            auto positions = read_vec3(*doc, attributes["POSITION"]);
+            if (!joint_values || !weight_values || !positions)
+                return std::unexpected(detail::fail(error_code::invalid_format, "skinned primitive cannot be read"));
+            const std::size_t vertices = positions->size();
+            std::vector<matrix4> blend(vertices);
+            for (std::size_t v = 0; v < vertices; ++v) {
+                auto ji = joint_vector(*joint_values, v);
+                auto wi = weight_vector(*weight_values, v);
+                if (!ji || !wi) return std::unexpected(detail::fail(error_code::invalid_format, "skin weights cannot be read"));
+                matrix4 m{};
+                for (std::size_t k = 0; k < 4U; ++k) {
+                    if ((*wi)[k] == 0.0F) continue;
+                    if ((*ji)[k] >= skinning.size()) return std::unexpected(detail::fail(error_code::invalid_format, "joint index out of range"));
+                    for (std::size_t e = 0; e < 16U; ++e) m[e] += (*wi)[k] * skinning[(*ji)[k]][e];
+                }
+                blend[v] = m;
+            }
+            const auto normal_of = [&](const matrix4 & m, vec3 v) {
+                const matrix4 inverse = general_inverse(m);  // inverse transpose for normals
+                return unit({inverse[0]*v.x + inverse[1]*v.y + inverse[2]*v.z, inverse[4]*v.x + inverse[5]*v.y + inverse[6]*v.z,
+                             inverse[8]*v.x + inverse[9]*v.y + inverse[10]*v.z}, v);
+            };
+            std::vector<vec3> moved(vertices);
+            for (std::size_t v = 0; v < vertices; ++v) moved[v] = transform_point(blend[v], (*positions)[v]);
+            attributes["POSITION"] = builder.accessor_for<vec3>(moved, 5126U, "VEC3", 34962U, vec3_bounds(moved));
+            if (attributes.contains("NORMAL")) {
+                auto normals = read_vec3(*doc, attributes["NORMAL"]);
+                if (!normals) return std::unexpected(normals.error());
+                for (std::size_t v = 0; v < vertices; ++v) (*normals)[v] = normal_of(blend[v], (*normals)[v]);
+                attributes["NORMAL"] = builder.accessor_for<vec3>(*normals, 5126U, "VEC3", 34962U);
+            }
+            if (attributes.contains("TANGENT")) {
+                auto tangents = get_accessor(*doc, attributes["TANGENT"].get<std::size_t>());
+                if (!tangents) return std::unexpected(tangents.error());
+                std::vector<quat> out(vertices);
+                for (std::size_t v = 0; v < vertices; ++v) {
+                    auto t = quaternion(*tangents, v);
+                    if (!t) return std::unexpected(t.error());
+                    const vec3 turned = unit(linear(blend[v], {t->x, t->y, t->z}), {t->x, t->y, t->z});
+                    out[v] = {turned.x, turned.y, turned.z, t->w};
+                }
+                attributes["TANGENT"] = builder.accessor_for<quat>(out, 5126U, "VEC4", 34962U);
+            }
+            if (primitive.contains("targets"))
+                for (auto & target : primitive["targets"])
+                    for (const char * name : {"POSITION", "NORMAL", "TANGENT"}) {
+                        if (!target.contains(name)) continue;
+                        auto deltas = read_vec3(*doc, target[name]);
+                        if (!deltas) return std::unexpected(deltas.error());
+                        for (std::size_t v = 0; v < vertices && v < deltas->size(); ++v)
+                            (*deltas)[v] = std::string_view{name} == "NORMAL" ?
+                                [&] { const matrix4 inv = general_inverse(blend[v]); const vec3 d = (*deltas)[v];
+                                      return vec3{inv[0]*d.x + inv[1]*d.y + inv[2]*d.z, inv[4]*d.x + inv[5]*d.y + inv[6]*d.z,
+                                                  inv[8]*d.x + inv[9]*d.y + inv[10]*d.z}; }() :
+                                linear(blend[v], (*deltas)[v]);
+                        target[name] = builder.accessor_for<vec3>(*deltas, 5126U, "VEC3", 34962U,
+                            std::string_view{name} == "POSITION" ? vec3_bounds(*deltas) : json{});
+                    }
+        }
+        rebound[skin_index] = 1U;
+    }
+    for (std::size_t s_index = 0; s_index < root["skins"].size(); ++s_index) {
+        json & skin_value = root["skins"][s_index];
+        const auto & joints = skin_value["joints"];
+        std::vector<std::array<float, 16>> binds(joints.size());
+        for (std::size_t j = 0; j < joints.size(); ++j) binds[j] = general_inverse(posed[joints[j].get<std::size_t>()]);
+        if (rebound[s_index] || !skin_value.contains("inverseBindMatrices"))
+            skin_value["inverseBindMatrices"] = builder.accessor_for<std::array<float, 16>>(binds, 5126U, "MAT4");
+    }
+    drop_unused_bytes(builder);
     align4(builder.binary);
     root["buffers"][0]["byteLength"] = builder.binary.size();
     return pack_glb(builder);

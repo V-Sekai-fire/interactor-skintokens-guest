@@ -264,6 +264,34 @@ static Variant skintokens_start(String model_dir, String mesh_glb, String opts) 
 	return Variant(String("STARTED beams=" + std::to_string(g_job.gen.beams)));
 }
 
+// A VRM 1.0 file (as godot-vrm saves it, facing +Z) goes to a T-pose from whatever pose it is
+// in, then each joint's +Y is turned along its bone. Keeps the VRM's own skeleton; no model or GPU.
+static std::string g_vrm;
+static void vrm_job(void *) {
+	const std::vector<std::byte> bytes = read_whole(g_vrm);
+	auto posed = skintokens::pose_to_t_pose_glb_memory(bytes);
+	if (!posed) {
+		pump::fail("skintokens: T-pose: " + posed.error().message);
+	}
+	auto framed = skintokens::reframe_skin_joints_glb_memory(*posed);
+	if (!framed) {
+		pump::fail("skintokens: joint frames: " + framed.error().message);
+	}
+	g_result.assign(reinterpret_cast<const uint8_t *>(framed->data()),
+			reinterpret_cast<const uint8_t *>(framed->data()) + framed->size());
+	logf_("vrm: %zu bytes in, %zu bytes out", bytes.size(), g_result.size());
+}
+
+static Variant skintokens_vrm_start(String vrm1) {
+	g_vrm = vrm1.utf8();
+	g_log.clear();
+	g_result.clear();
+	if (!pump::start(&vrm_job, nullptr, size_t(16) << 20)) {
+		return Variant(String("FAIL a job is running"));
+	}
+	return Variant(String("STARTED vrm"));
+}
+
 static Variant skintokens_pump(PackedArray<uint8_t> in) {
 	return pump::step(in);
 }
@@ -308,6 +336,7 @@ static Variant skintokens_stats() {
 int main() {
 	ADD_API_FUNCTION(skintokens_attach, "String", "Object rd, int total_mb", "Attach the host's RenderingDevice");
 	ADD_API_FUNCTION(skintokens_start, "String", "String model_dir, String mesh_glb, String opts", "Rig a GLB on the pump");
+	ADD_API_FUNCTION(skintokens_vrm_start, "String", "String vrm1", "T-pose a VRM 1.0 and frame its joints on the pump");
 	ADD_API_FUNCTION(skintokens_pump, "Array", "PackedByteArray data", "Resume the job once: [header, text, rid]");
 	ADD_API_FUNCTION(skintokens_result_size, "int", "", "Bytes of the rigged GLB");
 	ADD_API_FUNCTION(skintokens_result_chunk, "PackedByteArray", "int offset, int bytes", "Rigged GLB bytes (<= 8 MiB)");

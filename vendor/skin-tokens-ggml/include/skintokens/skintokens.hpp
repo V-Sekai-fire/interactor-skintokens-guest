@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <optional>
 #include <vector>
 
 #if defined(SKINTOKENS_SHARED)
@@ -332,6 +333,19 @@ private:
 [[nodiscard]] SKINTOKENS_API result<glb_info> inspect_glb_file(
     const std::filesystem::path & path);
 
+// World rest rotation of each joint: its +Y runs along its bone (glTF and RCSF joint
+// orientation). Writers bake these into the rest pose; deformation does not change.
+// Turns every skin joint so its +Y runs along its bone, keeping the mesh, the clips, the
+// spring-bone colliders and the look-at origin where they were. Nodes in a node constraint keep
+// their frame. Used for VRM 1.0 files after godot-vrm has turned them to face +Z.
+// Puts a VRM 1.0 humanoid in a T-pose from whatever pose it is in, and makes that the rest:
+// arms and fingers along +-X, legs down; the mesh is skinned into the pose and bound there.
+[[nodiscard]] SKINTOKENS_API result<std::vector<std::byte>> pose_to_t_pose_glb_memory(std::span<const std::byte> bytes);
+[[nodiscard]] SKINTOKENS_API result<std::vector<std::byte>> reframe_skin_joints_glb_memory(std::span<const std::byte> bytes);
+[[nodiscard]] SKINTOKENS_API std::vector<quat> joint_rest_frames(const skeleton & rig);
+// The same, with an optional aim point per joint that overrides the child it points at.
+[[nodiscard]] SKINTOKENS_API std::vector<quat> joint_rest_frames(const skeleton & rig,
+    const std::vector<std::optional<vec3>> & aims);
 [[nodiscard]] SKINTOKENS_API rig_kind identify_rig(const skeleton & value);
 
 // Uniformly fits a motion rig to the mesh's vertical extent and centre while
