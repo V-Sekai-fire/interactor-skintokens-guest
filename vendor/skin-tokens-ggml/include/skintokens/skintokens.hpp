@@ -199,6 +199,25 @@ struct skin {
     // False denotes the deterministic geometric integration baseline. It is
     // never presented as learned TokenRig output.
     bool learned = false;
+    // How the learned point-cloud weights reached the vertices. With robust
+    // transfer, `matched` vertices took weights from samples on their own
+    // surface (close, same facing, same connected part); `inpainted` vertices
+    // (unmatched or outliers) were solved from them with a mollified-cotan
+    // weight inpainting (Abdrashitov et al. 2023); `fallback` vertices sit on
+    // a part with no matched vertex and keep plain interpolation.
+    struct transfer_report {
+        bool robust = false;
+        std::size_t welded = 0;
+        std::size_t matched = 0;
+        std::size_t outliers = 0;
+        std::size_t inpainted = 0;
+        std::size_t fallback = 0;
+        // Separate mesh parts that dropped joints not connected to their own.
+        std::size_t trimmed_parts = 0;
+        std::size_t solved_joints = 0;
+        std::size_t iterations = 0;
+        float residual = 0.0F;
+    } transfer;
 };
 
 struct skinned_asset {
@@ -244,6 +263,11 @@ struct generation_options {
     // Optional upstream voxel_skin heuristic. The released demo leaves this
     // disabled by default; raw learned weights are its normal export path.
     bool surface_postprocess = false;
+    // Robust weight transfer from the decoded point cloud to the vertices:
+    // reject samples from another surface (distance, facing, connected part),
+    // then inpaint the unmatched and outlier vertices. False reproduces the
+    // upstream eight-neighbour interpolation byte for byte.
+    bool robust_transfer = true;
 };
 
 class SKINTOKENS_API model final {
