@@ -1171,10 +1171,10 @@ result<std::vector<std::byte>> pack_glb(glb_builder & builder) {
     return output;
 }
 
-// A one-frame clip is the rest pose, not a motion: name it so.
+// A one-frame clip is the rest pose, not a motion: give it Godot's rest-pose clip name.
 std::string animation_name(const motion & animation) {
     if (!animation.name.empty()) return animation.name;
-    return animation.frames <= 1U ? "Rest pose" : "Motion";
+    return animation.frames <= 1U ? "RESET" : "Motion";
 }
 } // namespace
 

@@ -97,7 +97,7 @@ struct motion {
     skeleton rig;
     std::vector<vec3> root_translations;
     std::vector<quat> local_rotations; // [frame, joint]
-    // Clip name written to a GLB. Empty: "Rest pose" for one frame, otherwise "Motion".
+    // Clip name written to a GLB. Empty: "RESET" (Godot's rest-pose clip name) for one frame, otherwise "Motion".
     std::string name;
 };
 
