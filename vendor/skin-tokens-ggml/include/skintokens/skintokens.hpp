@@ -413,4 +413,11 @@ compare_soma30_to_generated(
     const skin & binding,
     const motion & animation);
 
+// Adds `animation` to a GLB that already holds its skin (for example a rigged character from
+// save_rigged_source_glb_memory): everything else in the file stays. Its joints are found by name
+// among the skin's; a clip of the same name is replaced, other clips (such as RESET) stay.
+[[nodiscard]] SKINTOKENS_API result<std::vector<std::byte>> add_animation_glb_memory(
+    std::span<const std::byte> rigged,
+    const motion & animation);
+
 } // namespace skintokens

@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <array>
+#include <fstream>
+#include <span>
+#include <vector>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -718,9 +721,16 @@ result<humanoid_match_report> retarget_soma30_glb_file(
     auto animation=retarget_soma30_motion_to_generated(
         *source,asset->binding.rig,*mapping,options);
     if (!animation) return std::unexpected(animation.error());
-    auto saved=save_skinned_animation_glb_file(
-        output_glb,asset->geometry,asset->binding,*animation);
-    if (!saved) return std::unexpected(saved.error());
+    animation->name=source->name;
+    // Add the clip to the rigged file itself, so its materials, textures and RESET clip stay.
+    std::ifstream stream(generated_rigged_glb,std::ios::binary);
+    const std::vector<char> raw{std::istreambuf_iterator<char>(stream),{}};
+    auto bytes=add_animation_glb_memory(
+        std::span<const std::byte>{reinterpret_cast<const std::byte *>(raw.data()),raw.size()},*animation);
+    if (!bytes) return std::unexpected(bytes.error());
+    std::ofstream output(output_glb,std::ios::binary|std::ios::trunc);
+    output.write(reinterpret_cast<const char *>(bytes->data()),static_cast<std::streamsize>(bytes->size()));
+    if (!output) return std::unexpected(detail::fail(error_code::io,"cannot write "+output_glb.string()));
     return mapping->report;
 }
 
