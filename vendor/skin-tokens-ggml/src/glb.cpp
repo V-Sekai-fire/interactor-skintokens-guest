@@ -549,6 +549,7 @@ result<std::vector<mesh_instance>> collect_mesh_instances(const document & doc, 
         if (!roots.is_array())
             return std::unexpected(detail::fail(error_code::invalid_format, "glTF scene roots are invalid"));
         std::vector<std::uint8_t> visiting(nodes->size(), 0U);
+        std::vector<std::optional<matrix4>> node_world(nodes->size());
         std::function<result<void>(std::size_t, const matrix4 &)> visit =
             [&](std::size_t index, const matrix4 & parent) -> result<void> {
                 if (index >= nodes->size() || !(*nodes)[index].is_object())
@@ -560,6 +561,7 @@ result<std::vector<mesh_instance>> collect_mesh_instances(const document & doc, 
                 auto local = node_matrix(node);
                 if (!local) return std::unexpected(local.error());
                 const matrix4 world = multiply(parent, *local);
+                node_world[index] = world;
                 if (auto mesh_index = node.find("mesh"); mesh_index != node.end()) {
                     if (!mesh_index->is_number_unsigned() || mesh_index->get<std::size_t>() >= meshes.size())
                         return std::unexpected(detail::fail(error_code::invalid_format, "glTF node mesh index is invalid"));
@@ -585,6 +587,54 @@ result<std::vector<mesh_instance>> collect_mesh_instances(const document & doc, 
                 return std::unexpected(detail::fail(error_code::invalid_format, "glTF scene root is invalid"));
             auto visited = visit(root.get<std::size_t>(), identity_matrix());
             if (!visited) return std::unexpected(visited.error());
+        }
+        // glTF ignores a skinned mesh's node transform: its joints place it. At rest each vertex
+        // goes through joint world x inverse bind; use the matrix of the joint carrying the most
+        // weight (for a mesh bound in its rest pose every weighted joint gives the same one).
+        for (auto & instance : instances) {
+            const auto & node = (*nodes)[instance.node];
+            auto skin_index = node.find("skin");
+            if (skin_index == node.end()) continue;
+            if (!skin_index->is_number_unsigned())
+                return std::unexpected(detail::fail(error_code::invalid_format, "glTF node skin index is invalid"));
+            auto skin_item = item(doc.root, "skins", skin_index->get<std::size_t>());
+            if (!skin_item) return std::unexpected(skin_item.error());
+            const auto & joints = (**skin_item).value("joints", json::array());
+            if (!joints.is_array() || joints.empty()) continue;
+            std::vector<double> load(joints.size(), 0.0);
+            for (const auto & primitive : meshes[instance.mesh_index].value("primitives", json::array())) {
+                if (!loaded_primitive(primitive)) continue;
+                const auto & attributes = primitive["attributes"];
+                if (!attributes.contains("JOINTS_0") || !attributes.contains("WEIGHTS_0")) continue;
+                auto joint_values = get_accessor(doc, attributes["JOINTS_0"].get<std::size_t>());
+                auto weight_values = get_accessor(doc, attributes["WEIGHTS_0"].get<std::size_t>());
+                if (!joint_values) return std::unexpected(joint_values.error());
+                if (!weight_values) return std::unexpected(weight_values.error());
+                for (std::size_t v = 0; v < joint_values->count && v < weight_values->count; ++v) {
+                    auto j = joint_vector(*joint_values, v);
+                    auto w = weight_vector(*weight_values, v);
+                    if (!j) return std::unexpected(j.error());
+                    if (!w) continue;  // an unweighted vertex adds nothing
+                    for (std::size_t c = 0; c < 4U; ++c)
+                        if ((*w)[c] > 0.0F && (*j)[c] < load.size()) load[(*j)[c]] += (*w)[c];
+                }
+            }
+            const auto heaviest = static_cast<std::size_t>(std::max_element(load.begin(), load.end()) - load.begin());
+            if (load[heaviest] <= 0.0 || !joints[heaviest].is_number_unsigned()) continue;
+            const auto joint_node = joints[heaviest].get<std::size_t>();
+            if (joint_node >= node_world.size() || !node_world[joint_node]) continue;
+            matrix4 bind = identity_matrix();
+            if (auto binds = (**skin_item).find("inverseBindMatrices"); binds != (**skin_item).end()) {
+                if (!binds->is_number_unsigned())
+                    return std::unexpected(detail::fail(error_code::invalid_format, "glTF inverse binds index is invalid"));
+                auto read = get_accessor(doc, binds->get<std::size_t>());
+                if (!read) return std::unexpected(read.error());
+                if (read->component != 5126U || read->shape != "MAT4" || read->count != joints.size())
+                    return std::unexpected(detail::fail(error_code::invalid_format, "inverse binds must be float MAT4, one per joint"));
+                for (std::size_t k = 0; k < 16U; ++k)
+                    bind[k] = little<float>(read->bytes.data() + heaviest * read->stride + k * 4U);
+            }
+            instance.transform = multiply(*node_world[joint_node], bind);
         }
     } else {
         for (std::size_t index = 0; index < meshes.size(); ++index)
