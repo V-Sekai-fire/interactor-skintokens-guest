@@ -6,10 +6,12 @@
 //
 // Host side:
 //   skintokens_attach(rd, total_mb)                once; rd may be null (ggml-rd CPU kernels)
-//   skintokens_start(model_dir, mesh_glb, opts)    opts: "beams=1 seed=0 temperature=1 max_tokens=2048 K=V ..."
+//   skintokens_start(model_dir, mesh_glb, opts)    opts: "beams=1 seed=0 temperature=1 max_tokens=2048 robust=1 K=V ..."
 //                                                   (K=V other than those = GGML_RD_* switches)
 //   skintokens_pump(data)                          every frame until DONE / ERROR
 //   skintokens_result_size(), skintokens_result_chunk(off, n)   the rigged GLB, <= 8 MiB a call
+//   skintokens_trace_size(), skintokens_trace_chunk(off, n)     with opts trace=1: the weight
+//                                                   transfer's inputs (skintokens-transfer-replay)
 #include <api.hpp>
 
 #include <algorithm>
@@ -23,6 +25,8 @@
 #include <vector>
 
 #include <skintokens/skintokens.hpp>
+
+#include "binding.hpp"
 
 #include "ggml-backend.h"
 #include "ggml-rd.h"
@@ -105,6 +109,7 @@ struct Job {
 static Job g_job;
 static std::optional<skintokens::model> g_model;
 static std::vector<uint8_t> g_result;
+static std::vector<uint8_t> g_trace;
 
 static bool load_model(const std::string &dir) {
 	ggml_backend_reg_t reg = ggml_backend_rd_reg();
@@ -166,6 +171,9 @@ static void rig_job(void *) {
 	}
 	g_result.assign(reinterpret_cast<const uint8_t *>(bytes->data()),
 			reinterpret_cast<const uint8_t *>(bytes->data()) + bytes->size());
+	const auto &t = binding->transfer;
+	logf_("transfer: robust=%d welded=%zu matched=%zu outliers=%zu inpainted=%zu fallback=%zu trimmed_parts=%zu joints_solved=%zu iterations=%zu residual=%.1e",
+			int(t.robust), t.welded, t.matched, t.outliers, t.inpainted, t.fallback, t.trimmed_parts, t.solved_joints, t.iterations, double(t.residual));
 	logf_("rigged: %zu joints, %zu bytes", binding->rig.names.size(), g_result.size());
 }
 
@@ -214,6 +222,8 @@ static Variant skintokens_start(String model_dir, String mesh_glb, String opts) 
 		unsetenv(k);
 	}
 	g_job = Job{};
+	g_trace.clear();
+	skintokens::detail::transfer_capture() = nullptr;
 	g_job.dir = model_dir.utf8();
 	g_job.mesh = mesh_glb.utf8();
 	for (const std::string &kv : split_ws(opts.utf8())) {
@@ -231,6 +241,17 @@ static Variant skintokens_start(String model_dir, String mesh_glb, String opts) 
 			g_job.gen.temperature = std::stof(v);
 		} else if (k == "max_tokens") {
 			g_job.gen.max_tokens = std::stoul(v);
+		} else if (k == "trace") {
+			if (v != "0") {
+				skintokens::detail::transfer_capture() = [](const skintokens::detail::transfer_inputs &in) {
+					const auto bytes = skintokens::detail::serialize_transfer_inputs(in);
+					g_trace.assign(reinterpret_cast<const uint8_t *>(bytes.data()),
+							reinterpret_cast<const uint8_t *>(bytes.data()) + bytes.size());
+				};
+			}
+		} else if (k == "robust") {
+			// robust=0 is the control: upstream eight-neighbour interpolation.
+			g_job.gen.robust_transfer = v != "0";
 		} else {
 			setenv(k.c_str(), v.c_str(), 1);
 		}
@@ -251,13 +272,25 @@ static Variant skintokens_result_size() {
 	return Variant(int64_t(g_result.size()));
 }
 
-static Variant skintokens_result_chunk(int64_t offset, int64_t bytes) {
+static Variant chunk_of(const std::vector<uint8_t> &data, int64_t offset, int64_t bytes) {
 	const size_t off = size_t(std::max<int64_t>(offset, 0));
-	if (off >= g_result.size()) {
+	if (off >= data.size()) {
 		return Variant(PackedArray<uint8_t>(std::vector<uint8_t>()));
 	}
-	const size_t n = std::min<size_t>({ size_t(std::max<int64_t>(bytes, 0)), size_t(8) << 20, g_result.size() - off });
-	return Variant(PackedArray<uint8_t>(g_result.data() + off, n));
+	const size_t n = std::min<size_t>({ size_t(std::max<int64_t>(bytes, 0)), size_t(8) << 20, data.size() - off });
+	return Variant(PackedArray<uint8_t>(data.data() + off, n));
+}
+
+static Variant skintokens_result_chunk(int64_t offset, int64_t bytes) {
+	return chunk_of(g_result, offset, bytes);
+}
+
+static Variant skintokens_trace_size() {
+	return Variant(int64_t(g_trace.size()));
+}
+
+static Variant skintokens_trace_chunk(int64_t offset, int64_t bytes) {
+	return chunk_of(g_trace, offset, bytes);
 }
 
 static Variant skintokens_output() {
@@ -278,6 +311,8 @@ int main() {
 	ADD_API_FUNCTION(skintokens_pump, "Array", "PackedByteArray data", "Resume the job once: [header, text, rid]");
 	ADD_API_FUNCTION(skintokens_result_size, "int", "", "Bytes of the rigged GLB");
 	ADD_API_FUNCTION(skintokens_result_chunk, "PackedByteArray", "int offset, int bytes", "Rigged GLB bytes (<= 8 MiB)");
+	ADD_API_FUNCTION(skintokens_trace_size, "int", "", "Bytes of the transfer trace (opts trace=1)");
+	ADD_API_FUNCTION(skintokens_trace_chunk, "PackedByteArray", "int offset, int bytes", "Transfer trace bytes (<= 8 MiB)");
 	ADD_API_FUNCTION(skintokens_output, "String", "", "What the job logged");
 	ADD_API_FUNCTION(skintokens_stats, "String", "", "ggml-rd and rd_compute counters");
 	halt();
