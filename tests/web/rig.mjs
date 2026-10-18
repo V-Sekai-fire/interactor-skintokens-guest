@@ -36,7 +36,7 @@ let state = null;
 while ((Date.now() - t0) / 1000 < maxSecs) {
   await new Promise(r => setTimeout(r, 5000));
   try { state = await pg.evaluate('window.__rig || null'); } catch (e) { log.write(`${stamp()} EVAL ${e.message}\n`); break; }
-  if (state && (state.state === 'done' || state.state === 'failed')) break;
+  if (state && (state.state === 'done' || state.state === 'failed')) { break; }
 }
 const errs = await pg.evaluate('window.__gpuerr').catch(() => ['<page gone>']);
 const ua = await pg.evaluate('navigator.userAgent').catch(() => '?');
