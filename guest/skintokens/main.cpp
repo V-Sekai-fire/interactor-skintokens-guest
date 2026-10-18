@@ -154,7 +154,13 @@ static void rig_job(void *) {
 	rest.rig = binding->rig;
 	rest.root_translations.assign(1U, rest.rig.rest_positions.front());
 	rest.local_rotations.assign(rest.rig.names.size(), {});
-	auto bytes = skintokens::save_skinned_animation_glb_memory(*mesh, *binding, rest);
+	// Rig the source GLB itself, so its materials, textures and UVs stay. A source that writer
+	// cannot take (buffer 0 not the binary chunk, no scene) gets the rebuilt one-material mesh.
+	auto bytes = skintokens::save_rigged_source_glb_memory(glb, *binding, rest);
+	if (!bytes) {
+		logf_("source GLB kept no materials: %s", bytes.error().message.c_str());
+		bytes = skintokens::save_skinned_animation_glb_memory(*mesh, *binding, rest);
+	}
 	if (!bytes) {
 		pump::fail("skintokens: GLB export failed: " + bytes.error().message);
 	}

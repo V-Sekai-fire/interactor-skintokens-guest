@@ -97,6 +97,8 @@ struct motion {
     skeleton rig;
     std::vector<vec3> root_translations;
     std::vector<quat> local_rotations; // [frame, joint]
+    // Clip name written to a GLB. Empty: "Rest pose" for one frame, otherwise "Motion".
+    std::string name;
 };
 
 enum class rig_kind : std::uint8_t { unknown, soma30, mixamo52 };
@@ -398,6 +400,16 @@ compare_soma30_to_generated(
 
 [[nodiscard]] SKINTOKENS_API result<std::vector<std::byte>> save_skinned_animation_glb_memory(
     const mesh & geometry,
+    const skin & binding,
+    const motion & animation);
+
+// Rigs the source GLB itself: its materials, textures, UVs, normals, tangents, morph targets and
+// extensions stay, and the joints, a skin and the clip are added. `binding` must come from the mesh
+// that load_glb_memory(source) returns (same vertex order). Each placed mesh gets a skinned copy
+// with world-space vertices at the scene root; the source's own skins and clips are dropped,
+// because they drive a skeleton that no longer moves these vertices.
+[[nodiscard]] SKINTOKENS_API result<std::vector<std::byte>> save_rigged_source_glb_memory(
+    std::span<const std::byte> source,
     const skin & binding,
     const motion & animation);
 

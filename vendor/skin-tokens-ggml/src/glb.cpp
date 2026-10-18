@@ -454,19 +454,24 @@ result<mesh> load_glb_memory(std::span<const std::byte> bytes) {
 }
 
 namespace {
-result<mesh> load_glb_document(result<document> doc) {
-    if (!doc) return std::unexpected(doc.error());
-    auto meshes = doc->root.find("meshes");
-    if (meshes == doc->root.end() || !meshes->is_array())
-        return std::unexpected(detail::fail(error_code::invalid_format, "GLB contains no meshes"));
+// Every mesh placed by the selected scene, in the order the loader reads them, with its world
+// transform and the node that places it. The writer that keeps the source GLB walks the same list,
+// so vertex i of the loaded mesh is vertex i of this walk.
+constexpr std::size_t no_node = std::numeric_limits<std::size_t>::max();
+struct mesh_instance { std::size_t mesh_index; matrix4 transform; std::size_t node; };
 
-    struct instance { std::size_t mesh_index; matrix4 transform; };
-    std::vector<instance> instances;
-    auto nodes = doc->root.find("nodes");
-    auto scenes = doc->root.find("scenes");
-    if (nodes != doc->root.end() && nodes->is_array() && scenes != doc->root.end() && scenes->is_array() && !scenes->empty()) {
+bool loaded_primitive(const json & primitive) {
+    return primitive.value("mode", 4U) == 4U && primitive.contains("attributes") && primitive.contains("indices") &&
+        primitive["attributes"].contains("POSITION") && primitive["attributes"]["POSITION"].is_number_unsigned();
+}
+
+result<std::vector<mesh_instance>> collect_mesh_instances(const document & doc, const json & meshes) {
+    std::vector<mesh_instance> instances;
+    auto nodes = doc.root.find("nodes");
+    auto scenes = doc.root.find("scenes");
+    if (nodes != doc.root.end() && nodes->is_array() && scenes != doc.root.end() && scenes->is_array() && !scenes->empty()) {
         std::size_t scene_index = 0U;
-        if (auto selected = doc->root.find("scene"); selected != doc->root.end()) {
+        if (auto selected = doc.root.find("scene"); selected != doc.root.end()) {
             if (!selected->is_number_unsigned())
                 return std::unexpected(detail::fail(error_code::invalid_format, "glTF scene index is invalid"));
             scene_index = selected->get<std::size_t>();
@@ -489,11 +494,11 @@ result<mesh> load_glb_document(result<document> doc) {
                 if (!local) return std::unexpected(local.error());
                 const matrix4 world = multiply(parent, *local);
                 if (auto mesh_index = node.find("mesh"); mesh_index != node.end()) {
-                    if (!mesh_index->is_number_unsigned() || mesh_index->get<std::size_t>() >= meshes->size())
+                    if (!mesh_index->is_number_unsigned() || mesh_index->get<std::size_t>() >= meshes.size())
                         return std::unexpected(detail::fail(error_code::invalid_format, "glTF node mesh index is invalid"));
                     if (instances.size() >= 4096U)
                         return std::unexpected(detail::fail(error_code::limit_exceeded, "too many glTF mesh instances"));
-                    instances.push_back({mesh_index->get<std::size_t>(), world});
+                    instances.push_back({mesh_index->get<std::size_t>(), world, index});
                 }
                 if (auto children = node.find("children"); children != node.end()) {
                     if (!children->is_array())
@@ -515,10 +520,22 @@ result<mesh> load_glb_document(result<document> doc) {
             if (!visited) return std::unexpected(visited.error());
         }
     } else {
-        for (std::size_t index = 0; index < meshes->size(); ++index)
-            instances.push_back({index, identity_matrix()});
+        for (std::size_t index = 0; index < meshes.size(); ++index)
+            instances.push_back({index, identity_matrix(), no_node});
     }
 
+    return instances;
+}
+
+result<mesh> load_glb_document(result<document> doc) {
+    if (!doc) return std::unexpected(doc.error());
+    auto meshes = doc->root.find("meshes");
+    if (meshes == doc->root.end() || !meshes->is_array())
+        return std::unexpected(detail::fail(error_code::invalid_format, "GLB contains no meshes"));
+
+    auto collected = collect_mesh_instances(*doc, *meshes);
+    if (!collected) return std::unexpected(collected.error());
+    const auto & instances = *collected;
     mesh output;
     bool has_colors = false;
     double metallic_sum = 0.0;
@@ -531,9 +548,8 @@ result<mesh> load_glb_document(result<document> doc) {
         auto primitives = mesh_object.find("primitives");
         if (primitives == mesh_object.end() || !primitives->is_array()) continue;
         for (const auto & primitive : *primitives) {
-            if (primitive.value("mode", 4U) != 4U || !primitive.contains("attributes") || !primitive.contains("indices")) continue;
+            if (!loaded_primitive(primitive)) continue;
             const auto & attributes = primitive["attributes"];
-            if (!attributes.contains("POSITION") || !attributes["POSITION"].is_number_unsigned()) continue;
             auto positions = get_accessor(*doc, attributes["POSITION"].get<std::size_t>());
             auto indices = get_accessor(*doc, primitive["indices"].get<std::size_t>());
             if (!positions) return std::unexpected(positions.error());
@@ -855,6 +871,8 @@ result<motion> load_skeleton_document(const document & doc, bool require_animati
     output.local_rotations.assign(joint_count, {});
     if (animations == doc.root.end() || !animations->is_array() || animations->empty()) return output;
     const auto & animation = (*animations)[0];
+    if (auto name = animation.find("name"); name != animation.end() && name->is_string())
+        output.name = name->get<std::string>();
     auto samplers = animation.find("samplers");
     auto channels = animation.find("channels");
     if (samplers == animation.end() || !samplers->is_array() || channels == animation.end() || !channels->is_array())
@@ -1126,6 +1144,40 @@ result<glb_info> inspect_glb_file(const std::filesystem::path & path) {
     return output;
 }
 
+namespace {
+// Writes the builder's JSON and binary chunk as one GLB.
+result<std::vector<std::byte>> pack_glb(glb_builder & builder) {
+    std::string json_text = builder.root.dump();
+    while (json_text.size() % 4U != 0U) json_text.push_back(' ');
+    align4(builder.binary);
+    const std::uint64_t total64 = 12ULL + 8ULL + json_text.size() + 8ULL + builder.binary.size();
+    if (total64 > std::numeric_limits<std::uint32_t>::max())
+        return std::unexpected(detail::fail(error_code::limit_exceeded, "exported GLB exceeds 4 GiB"));
+    std::vector<std::byte> output;
+    output.reserve(static_cast<std::size_t>(total64));
+    const auto write = [&](const void * data, std::size_t bytes) {
+        const auto * begin = static_cast<const std::byte *>(data);
+        output.insert(output.end(), begin, begin + bytes);
+    };
+    const auto write_u32 = [&](std::uint32_t value) {
+        if constexpr (std::endian::native == std::endian::big) value = std::byteswap(value);
+        write(&value, sizeof(value));
+    };
+    write_u32(glb_magic); write_u32(2U); write_u32(static_cast<std::uint32_t>(total64));
+    write_u32(static_cast<std::uint32_t>(json_text.size())); write_u32(json_chunk);
+    write(json_text.data(), json_text.size());
+    write_u32(static_cast<std::uint32_t>(builder.binary.size())); write_u32(bin_chunk);
+    write(builder.binary.data(), builder.binary.size());
+    return output;
+}
+
+// A one-frame clip is the rest pose, not a motion: name it so.
+std::string animation_name(const motion & animation) {
+    if (!animation.name.empty()) return animation.name;
+    return animation.frames <= 1U ? "Rest pose" : "Motion";
+}
+} // namespace
+
 result<std::vector<std::byte>> save_skinned_animation_glb_memory(
     const mesh & geometry, const skin & binding, const motion & animation) {
     auto valid = validate_export(geometry, binding, animation);
@@ -1220,34 +1272,264 @@ result<std::vector<std::byte>> save_skinned_animation_glb_memory(
         samplers.push_back({{"input", time_accessor}, {"output", output_accessor}, {"interpolation", "LINEAR"}});
         channels.push_back({{"sampler", sampler}, {"target", {{"node", joint}, {"path", "rotation"}}}});
     }
-    builder.root["animations"] = json::array({{{"name", "Kimodo motion"},
+    builder.root["animations"] = json::array({{{"name", animation_name(animation)},
         {"samplers", std::move(samplers)}, {"channels", std::move(channels)}}});
     builder.root["scenes"] = json::array({{{"nodes", {0U, mesh_node}}}});
     builder.root["scene"] = 0U;
     builder.root["buffers"].push_back({{"byteLength", builder.binary.size()}});
+    return pack_glb(builder);
+}
 
-    std::string json_text = builder.root.dump();
-    while (json_text.size() % 4U != 0U) json_text.push_back(' ');
-    align4(builder.binary);
-    const std::uint64_t total64 = 12ULL + 8ULL + json_text.size() + 8ULL + builder.binary.size();
-    if (total64 > std::numeric_limits<std::uint32_t>::max())
-        return std::unexpected(detail::fail(error_code::limit_exceeded, "exported GLB exceeds 4 GiB"));
-    std::vector<std::byte> output;
-    output.reserve(static_cast<std::size_t>(total64));
-    const auto write = [&](const void * data, std::size_t bytes) {
-        const auto * begin = static_cast<const std::byte *>(data);
-        output.insert(output.end(), begin, begin + bytes);
-    };
-    const auto write_u32 = [&](std::uint32_t value) {
-        if constexpr (std::endian::native == std::endian::big) value = std::byteswap(value);
-        write(&value, sizeof(value));
-    };
-    write_u32(glb_magic); write_u32(2U); write_u32(static_cast<std::uint32_t>(total64));
-    write_u32(static_cast<std::uint32_t>(json_text.size())); write_u32(json_chunk);
-    write(json_text.data(), json_text.size());
-    write_u32(static_cast<std::uint32_t>(builder.binary.size())); write_u32(bin_chunk);
-    write(builder.binary.data(), builder.binary.size());
+namespace {
+vec3 linear(const matrix4 & m, vec3 v) {
+    return {m[0]*v.x + m[4]*v.y + m[8]*v.z, m[1]*v.x + m[5]*v.y + m[9]*v.z, m[2]*v.x + m[6]*v.y + m[10]*v.z};
+}
+vec3 unit(vec3 v, vec3 fallback) {
+    const float length = std::sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
+    return length > 1e-12F ? vec3{v.x/length, v.y/length, v.z/length} : fallback;
+}
+bool is_identity(const matrix4 & m) { return m == identity_matrix(); }
+
+// The rows of the transform's cofactor matrix: cofactor * n is the normal transform up to scale.
+struct normal_transform {
+    vec3 c0, c1, c2;
+    float sign;
+    vec3 operator()(vec3 n) const {
+        return {sign*(c0.x*n.x + c1.x*n.y + c2.x*n.z), sign*(c0.y*n.x + c1.y*n.y + c2.y*n.z),
+                sign*(c0.z*n.x + c1.z*n.y + c2.z*n.z)};
+    }
+};
+normal_transform normal_matrix(const matrix4 & m) {
+    const vec3 a0{m[0], m[1], m[2]}, a1{m[4], m[5], m[6]}, a2{m[8], m[9], m[10]};
+    return {cross(a1, a2), cross(a2, a0), cross(a0, a1), determinant3(m) < 0.0F ? -1.0F : 1.0F};
+}
+
+result<std::vector<vec3>> read_vec3(const document & doc, const json & index) {
+    if (!index.is_number_unsigned())
+        return std::unexpected(detail::fail(error_code::invalid_format, "glTF accessor index is invalid"));
+    auto values = get_accessor(doc, index.get<std::size_t>());
+    if (!values) return std::unexpected(values.error());
+    std::vector<vec3> output(values->count);
+    for (std::size_t i = 0; i < values->count; ++i) {
+        auto value = vector3(*values, i);
+        if (!value) return std::unexpected(value.error());
+        output[i] = *value;
+    }
     return output;
+}
+} // namespace
+
+result<std::vector<std::byte>> save_rigged_source_glb_memory(
+    std::span<const std::byte> source, const skin & binding, const motion & animation) {
+    auto geometry = load_glb_memory(source);
+    if (!geometry) return std::unexpected(geometry.error());
+    auto valid = validate_export(*geometry, binding, animation);
+    if (!valid) return std::unexpected(valid.error());
+    auto doc = parse_document(source);
+    if (!doc) return std::unexpected(doc.error());
+
+    glb_builder builder;
+    builder.root = doc->root;
+    builder.binary = doc->binary;
+    json & root = builder.root;
+    if (!root.contains("buffers") || !root["buffers"].is_array() || root["buffers"].empty())
+        root["buffers"] = json::array({json::object()});
+    if (root["buffers"][0].contains("uri"))
+        return std::unexpected(detail::fail(error_code::invalid_format, "GLB buffer 0 is not the binary chunk"));
+    for (const char * name : {"bufferViews", "accessors", "nodes", "meshes"})
+        if (!root.contains(name)) root[name] = json::array();
+    std::size_t scene_index = root.value("scene", 0U);
+    if (!root.contains("scenes") || !root["scenes"].is_array() || scene_index >= root["scenes"].size())
+        return std::unexpected(detail::fail(error_code::invalid_format, "GLB has no scene to rig"));
+
+    const json source_meshes = doc->root["meshes"];
+    auto collected = collect_mesh_instances(*doc, source_meshes);
+    if (!collected) return std::unexpected(collected.error());
+    std::vector<std::size_t> uses(source_meshes.size(), 0U);
+    for (const auto & instance : *collected) ++uses[instance.mesh_index];
+
+    // The source's skins and clips drive its old skeleton, which no longer moves these vertices.
+    root.erase("skins");
+    root.erase("animations");
+    for (auto & node : root["nodes"]) node.erase("skin");
+
+    const std::size_t joint_count = binding.rig.names.size();
+    const std::size_t joint_base = root["nodes"].size();
+    json pending = json::array();
+    std::vector<std::uint8_t> node_done(root["nodes"].size(), 0U);
+    std::uint32_t base = 0U;
+    for (const auto & instance : *collected) {
+        const json & source_mesh = source_meshes[instance.mesh_index];
+        const matrix4 & world = instance.transform;
+        const bool moved = !is_identity(world);
+        const bool mirrored = determinant3(world) < 0.0F;
+        const auto normals = normal_matrix(world);
+        json skinned_primitives = json::array();
+        json kept_primitives = json::array();
+        for (const auto & primitive : source_mesh.value("primitives", json::array())) {
+            if (!loaded_primitive(primitive)) { kept_primitives.push_back(primitive); continue; }
+            json out = primitive;
+            json & attributes = out["attributes"];
+            auto count = get_accessor(*doc, attributes["POSITION"].get<std::size_t>());
+            if (!count) return std::unexpected(count.error());
+            const std::size_t n = count->count;
+            if (base + n > geometry->vertices.size())
+                return std::unexpected(detail::fail(error_code::invalid_format, "source walk does not match the loaded mesh"));
+            const std::span<const vec3> positions{geometry->vertices.data() + base, n};
+            json bounds{{"min", json::array({positions[0].x, positions[0].y, positions[0].z})},
+                        {"max", json::array({positions[0].x, positions[0].y, positions[0].z})}};
+            for (const auto & v : positions)
+                for (std::size_t axis = 0; axis < 3U; ++axis) {
+                    const float value = axis == 0U ? v.x : axis == 1U ? v.y : v.z;
+                    bounds["min"][axis] = std::min(bounds["min"][axis].get<float>(), value);
+                    bounds["max"][axis] = std::max(bounds["max"][axis].get<float>(), value);
+                }
+            attributes["POSITION"] = builder.accessor_for<vec3>(positions, 5126U, "VEC3", 34962U, bounds);
+            if (moved && attributes.contains("NORMAL")) {
+                auto values = read_vec3(*doc, attributes["NORMAL"]);
+                if (!values) return std::unexpected(values.error());
+                for (auto & v : *values) v = unit(normals(v), {0.0F, 1.0F, 0.0F});
+                attributes["NORMAL"] = builder.accessor_for<vec3>(*values, 5126U, "VEC3", 34962U);
+            }
+            if (moved && attributes.contains("TANGENT")) {
+                auto tangent = get_accessor(*doc, attributes["TANGENT"].get<std::size_t>());
+                if (!tangent) return std::unexpected(tangent.error());
+                std::vector<quat> values(tangent->count);
+                for (std::size_t i = 0; i < tangent->count; ++i) {
+                    auto t = quaternion(*tangent, i);
+                    if (!t) return std::unexpected(t.error());
+                    const vec3 xyz = unit(linear(world, {t->x, t->y, t->z}), {1.0F, 0.0F, 0.0F});
+                    values[i] = {xyz.x, xyz.y, xyz.z, mirrored ? -t->w : t->w};
+                }
+                attributes["TANGENT"] = builder.accessor_for<quat>(values, 5126U, "VEC4", 34962U);
+            }
+            for (const char * name : {"JOINTS_1", "WEIGHTS_1", "JOINTS_2", "WEIGHTS_2", "JOINTS_3", "WEIGHTS_3"})
+                attributes.erase(name);
+            attributes["JOINTS_0"] = builder.accessor_for<std::array<std::uint16_t, 4>>(
+                std::span<const std::array<std::uint16_t, 4>>{binding.joints.data() + base, n}, 5123U, "VEC4", 34962U);
+            attributes["WEIGHTS_0"] = builder.accessor_for<std::array<float, 4>>(
+                std::span<const std::array<float, 4>>{binding.weights.data() + base, n}, 5126U, "VEC4", 34962U);
+            if (moved && out.contains("targets")) {
+                for (auto & target : out["targets"]) {
+                    for (const char * name : {"POSITION", "NORMAL", "TANGENT"}) {
+                        if (!target.contains(name)) continue;
+                        auto values = read_vec3(*doc, target[name]);
+                        if (!values) return std::unexpected(values.error());
+                        // Deltas keep their length: normals go through the inverse transpose.
+                        const bool normal = std::string_view{name} == "NORMAL";
+                        const float det = std::max(std::abs(determinant3(world)), 1e-20F);
+                        for (auto & v : *values) {
+                            v = normal ? normals(v) : linear(world, v);
+                            if (normal) v = {v.x/det, v.y/det, v.z/det};
+                        }
+                        target[name] = builder.accessor_for<vec3>(*values, 5126U, "VEC3", 34962U);
+                    }
+                }
+            }
+            if (mirrored) {
+                auto indices = get_accessor(*doc, primitive["indices"].get<std::size_t>());
+                if (!indices) return std::unexpected(indices.error());
+                std::vector<std::uint32_t> flipped(indices->count);
+                for (std::size_t i = 0; i < indices->count; ++i) {
+                    auto value = index_value(*indices, i);
+                    if (!value) return std::unexpected(value.error());
+                    flipped[i] = *value;
+                }
+                for (std::size_t i = 0; i + 2U < flipped.size(); i += 3U) std::swap(flipped[i + 1U], flipped[i + 2U]);
+                out["indices"] = builder.accessor_for<std::uint32_t>(flipped, 5125U, "SCALAR", 34963U);
+            }
+            skinned_primitives.push_back(std::move(out));
+            base += static_cast<std::uint32_t>(n);
+        }
+        if (skinned_primitives.empty()) continue;  // nothing the rig read: the node stays as it was
+        json skinned_mesh = source_mesh;
+        skinned_mesh["primitives"] = std::move(skinned_primitives);
+        std::size_t mesh_slot = instance.mesh_index;
+        if (uses[instance.mesh_index] == 1U && kept_primitives.empty()) {
+            root["meshes"][mesh_slot] = std::move(skinned_mesh);
+        } else {
+            mesh_slot = root["meshes"].size();
+            root["meshes"].push_back(std::move(skinned_mesh));
+        }
+        std::string name = source_mesh.value("name", std::string{"mesh"});
+        if (instance.node != no_node) {
+            json & node = root["nodes"][instance.node];
+            name = node.value("name", name);
+            if (node_done[instance.node] == 0U) {
+                node_done[instance.node] = 1U;
+                if (kept_primitives.empty()) {
+                    node.erase("mesh");
+                    node.erase("weights");
+                } else {
+                    json rest = source_mesh;
+                    rest["primitives"] = std::move(kept_primitives);
+                    node["mesh"] = root["meshes"].size();
+                    root["meshes"].push_back(std::move(rest));
+                }
+            }
+        }
+        json skinned_node{{"name", name}, {"mesh", mesh_slot}, {"skin", 0U}};
+        if (instance.node != no_node && doc->root["nodes"][instance.node].contains("weights"))
+            skinned_node["weights"] = doc->root["nodes"][instance.node]["weights"];
+        pending.push_back(std::move(skinned_node));
+    }
+    if (base != geometry->vertices.size())
+        return std::unexpected(detail::fail(error_code::invalid_format, "source walk does not match the loaded mesh"));
+
+    for (std::size_t joint = 0; joint < joint_count; ++joint) {
+        const std::int32_t parent = binding.rig.parents[joint];
+        vec3 local = binding.rig.rest_positions[joint];
+        if (parent >= 0) local = sub(local, binding.rig.rest_positions[static_cast<std::size_t>(parent)]);
+        json node{{"name", binding.rig.names[joint]}, {"translation", {local.x, local.y, local.z}}};
+        json children = json::array();
+        for (std::size_t child = 0; child < joint_count; ++child)
+            if (binding.rig.parents[child] == static_cast<std::int32_t>(joint)) children.push_back(joint_base + child);
+        if (!children.empty()) node["children"] = std::move(children);
+        root["nodes"].push_back(std::move(node));
+    }
+    std::vector<std::size_t> placed;
+    for (auto & node : pending) { placed.push_back(root["nodes"].size()); root["nodes"].push_back(std::move(node)); }
+
+    std::vector<std::array<float, 16>> inverse_bind(joint_count);
+    for (std::size_t joint = 0; joint < joint_count; ++joint)
+        inverse_bind[joint] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
+                               -binding.rig.rest_positions[joint].x, -binding.rig.rest_positions[joint].y,
+                               -binding.rig.rest_positions[joint].z, 1};
+    json skin_object{{"name", binding.learned ? "SkinTokens learned binding" : "Geometric baseline binding"},
+                     {"inverseBindMatrices", builder.accessor_for<std::array<float, 16>>(inverse_bind, 5126U, "MAT4")},
+                     {"skeleton", joint_base}, {"joints", json::array()}};
+    for (std::size_t joint = 0; joint < joint_count; ++joint) skin_object["joints"].push_back(joint_base + joint);
+    root["skins"] = json::array({std::move(skin_object)});
+
+    std::vector<float> times(animation.frames);
+    const float fps = animation.frames_per_second > 0.0F ? animation.frames_per_second : 30.0F;
+    for (std::size_t frame = 0; frame < animation.frames; ++frame) times[frame] = static_cast<float>(frame) / fps;
+    const auto time_accessor = builder.accessor_for<float>(times, 5126U, "SCALAR", std::nullopt,
+        json{{"min", {times.front()}}, {"max", {times.back()}}});
+    json samplers = json::array();
+    json channels = json::array();
+    samplers.push_back({{"input", time_accessor}, {"output", builder.accessor_for<vec3>(animation.root_translations, 5126U, "VEC3")},
+                        {"interpolation", "LINEAR"}});
+    channels.push_back({{"sampler", 0U}, {"target", {{"node", joint_base}, {"path", "translation"}}}});
+    for (std::size_t joint = 0; joint < joint_count; ++joint) {
+        std::vector<quat> values(animation.frames);
+        for (std::size_t frame = 0; frame < animation.frames; ++frame)
+            values[frame] = animation.local_rotations[frame * joint_count + joint];
+        const auto sampler = samplers.size();
+        samplers.push_back({{"input", time_accessor}, {"output", builder.accessor_for<quat>(values, 5126U, "VEC4")},
+                            {"interpolation", "LINEAR"}});
+        channels.push_back({{"sampler", sampler}, {"target", {{"node", joint_base + joint}, {"path", "rotation"}}}});
+    }
+    root["animations"] = json::array({{{"name", animation_name(animation)},
+        {"samplers", std::move(samplers)}, {"channels", std::move(channels)}}});
+
+    json & scene = root["scenes"][scene_index];
+    if (!scene.contains("nodes")) scene["nodes"] = json::array();
+    scene["nodes"].push_back(joint_base);
+    for (auto index : placed) scene["nodes"].push_back(index);
+    align4(builder.binary);
+    root["buffers"][0]["byteLength"] = builder.binary.size();
+    return pack_glb(builder);
 }
 
 result<void> save_skinned_animation_glb_file(
