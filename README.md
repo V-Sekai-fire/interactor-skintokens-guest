@@ -21,7 +21,7 @@ godot --path tests/rig --resolution 64x64 --script run_rig.gd -- \
 
 ## Licence
 
-The licence is not stated. skin-tokens-ggml and the SkinTokens model are MIT; `vendor/nlohmann/json.hpp` is MIT.
+This repository is licensed to K. S. Ernest (iFire) Lee only, with all rights reserved; see `LICENSE`. A free and open-source licence is not yet decided. skin-tokens-ggml and the SkinTokens model are MIT; `vendor/nlohmann/json.hpp` is MIT.
 
 ## Run in a browser
 
