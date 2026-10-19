@@ -1998,6 +1998,19 @@ result<std::vector<std::byte>> save_rigged_source_glb_memory(
     }
     holder->push_back(new_joint_base);
     for (auto index : placed) holder->push_back(index);
+    // Godot's GODOT_single_root says the scene's first node is the whole scene. A turned root
+    // cannot hold the new nodes, so the scene now has several roots: Godot would drop all but
+    // the first (the skinned meshes go missing). Remove the marker so Godot adds its own root.
+    if (scene["nodes"].size() > 1U)
+        for (const char * list : {"extensionsUsed", "extensionsRequired"}) {
+            const auto found = root.find(list);
+            if (found == root.end() || !found->is_array()) continue;
+            json kept = json::array();
+            for (const auto & name : *found)
+                if (name != "GODOT_single_root") kept.push_back(name);
+            if (kept.empty()) root.erase(list);
+            else *found = std::move(kept);
+        }
     drop_unused_bytes(builder);
     align4(builder.binary);
     root["buffers"][0]["byteLength"] = builder.binary.size();
