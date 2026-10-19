@@ -1,0 +1,11 @@
+[configuration]
+
+entry_symbol = "riscv_library_init"
+compatibility_minimum = "4.4"
+
+[libraries]
+
+linux.debug.double.x86_64 = "./libgodot_riscv.linux.template_release.double.x86_64.so"
+linux.release.double.x86_64 = "./libgodot_riscv.linux.template_release.double.x86_64.so"
+macos.debug.double = "./libgodot_riscv.macos.template_release.double.universal"
+macos.release.double = "./libgodot_riscv.macos.template_release.double.universal"

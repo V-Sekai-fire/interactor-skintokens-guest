@@ -1,0 +1,81 @@
+name: guest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  SLANG_VERSION: 2026.13.1
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: weft/3-interactor/skintokens-guest
+      - name: Tools from apt
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q cmake ninja-build python3 spirv-tools
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.17"
+      - name: slangc
+        run: |
+          mkdir -p "$HOME/opt/slang" "$HOME/bin"
+          curl -fsSL "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.tar.gz" | tar -xz -C "$HOME/opt/slang"
+          ln -sf "$HOME/opt/slang/bin/slangc" "$HOME/bin/slangc"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+      - name: The goal manifest's sibling checkouts
+        working-directory: weft
+        run: |
+          for p in 2-contract/guest-runtime:contract-guest-runtime 2-contract/ggml-rd:contract-ggml-rd \
+                   2-contract/ggml:ggml 5-repository/riscv64-sysroot:repository-riscv64-sysroot; do
+            git clone -q --depth 1 "https://github.com/V-Sekai-fire/${p#*:}" "${p%%:*}"
+          done
+      - uses: prefix-dev/setup-pixi@v0.9.3
+        with:
+          manifest-path: weft/5-repository/riscv64-sysroot/pixi.toml
+          cache: false
+      - name: clang and lld from the riscv64-sysroot checkout (pixi pins >= 20; Ubuntu's clang 18 cannot compile libstdc++'s std::expected)
+        working-directory: weft/5-repository/riscv64-sysroot
+        run: |
+          echo "$PWD/.pixi/envs/default/bin" >> "$GITHUB_PATH"
+          .pixi/envs/default/bin/clang++ --print-targets | grep -q riscv64
+          .pixi/envs/default/bin/clang++ --version | head -1
+      - name: skintokens.elf from a clean runner
+        working-directory: weft/3-interactor/skintokens-guest
+        run: elixir tools/build.exs --build="$RUNNER_TEMP/rv64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skintokens-elf-${{ github.sha }}
+          path: ${{ runner.temp }}/rv64/skintokens.elf
+
+  bintr:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools from apt
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q clang xvfb
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.17"
+      - uses: actions/download-artifact@v4
+        with:
+          name: skintokens-elf-${{ github.sha }}
+          path: ${{ runner.temp }}/elf
+      - name: skintokens.elf natively translated and interpreted, and the controls
+        run: elixir tools/check_bintr.exs --elf="$RUNNER_TEMP/elf/skintokens.elf" --work="$RUNNER_TEMP/bintr"
