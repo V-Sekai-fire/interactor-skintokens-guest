@@ -752,8 +752,10 @@ result<skin> decode_binding(const detail::weight_component &weights, ggml_backen
     }
     if (robust_transfer && !surface_postprocess && !trace_binding) {
         return detail::profiled("binding.decode.robust_transfer", [&] {
+            detail::robust_transfer_options robust_options;
+            robust_options.joints = normalized_joints;
             return detail::integrate_robust_binding(target, normalized_vertices, vertex_normals, faces,
-                sampled_points, sampled_normals, sampled_faces, dense);
+                sampled_points, sampled_normals, sampled_faces, dense, robust_options);
         });
     }
     auto output = detail::profiled("binding.decode.cpu_integration", [&] {

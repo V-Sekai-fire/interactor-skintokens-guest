@@ -1,4 +1,5 @@
 #include "binding.hpp"
+#include "rigid_parts.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1314,6 +1315,15 @@ skin integrate_robust_binding(
                     values[joint] = keep[joint] ? static_cast<float>(values[joint] / kept) : 0.0F;
             }
         }
+    }
+
+    // 6b. Rigid parts: a closed part on one joint follows it (rigid_parts.hpp).
+    if (options.rigid_parts && options.joints.size() == joint_count && target.parents.size() == joint_count) {
+        const auto solids = rigid::find_parts(count, welded_faces);
+        std::vector<std::uint32_t> copies(count, 0U);
+        for (const auto w : welded_of) ++copies[w];
+        output.transfer.rigid_parts = rigid::snap_rigid_parts(solids, rigid::pair_shells(solids, position), position,
+            robust, joint_count, target.parents, options.joints, {}, copies);
     }
 
     for (std::size_t vertex = 0; vertex < n; ++vertex)
