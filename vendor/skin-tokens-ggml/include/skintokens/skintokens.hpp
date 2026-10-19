@@ -335,6 +335,8 @@ private:
 // optional; static armatures are represented by one identity rest frame.
 [[nodiscard]] SKINTOKENS_API result<motion> load_skeleton_glb_file(
     const std::filesystem::path &path);
+[[nodiscard]] SKINTOKENS_API result<motion> load_skeleton_glb_memory(
+    std::span<const std::byte> bytes);
 
 // Loads mesh geometry, JOINTS_0/WEIGHTS_0, skeleton, and optional animation
 // from one bounded GLB. This enables model-independent motion retargeting of a
