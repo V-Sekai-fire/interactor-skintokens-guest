@@ -15,7 +15,7 @@ defmodule CheckBintr do
   }
   @wall_s 600
   @expected [
-    "FAIL kind is loop or once, got spin 1.1",
+    "FAIL kind is loop, once or whole, got spin 1.1",
     "STARTED motion walk",
     "DONE",
     "motion walk (loop): start ",
