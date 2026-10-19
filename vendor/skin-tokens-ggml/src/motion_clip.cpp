@@ -150,8 +150,17 @@ result<std::pair<motion, clip_cut_report>> cut_clip(const motion &in, clip_cut k
                 last = f;
             }
         if (first == F) first = 0, last = F - 2U;
-        const std::size_t lo = first >= 6U ? first - 6U : 0U, hi = std::min(F, last + 7U);
-        for (std::size_t f = lo; f < hi; ++f) frames.push_back(f);
+        // The viewer loops every clip, so end on the frame after the action that comes back
+        // closest to the start pose.
+        const std::size_t lo = first >= 6U ? first - 6U : 0U;
+        std::size_t hi = std::min(F - 1U, last + 1U);
+        float best = std::numeric_limits<float>::infinity();
+        for (std::size_t e = hi; e < F; ++e) {
+            float mx = 0.0F;
+            const float c = seam(lo, e, mx);
+            if (c < best) best = c, hi = e, report.seam_before_max_degrees = mx;
+        }
+        for (std::size_t f = lo; f <= hi; ++f) frames.push_back(f);
         report.start = lo;
     } else {
         const std::size_t L0 = static_cast<std::size_t>(std::lround(seconds * fps));
@@ -222,9 +231,25 @@ result<std::pair<motion, clip_cut_report>> cut_clip(const motion &in, clip_cut k
         out.root_translations.push_back(out.root_translations.front());
         for (std::size_t j = 0; j < J; ++j) out.local_rotations.push_back(out.local_rotations[j]);
     } else {
-        // Keep the one-shot on the spot where it starts.
+        // Fade the last K frames into the start pose and bring the root back to where it started.
+        const std::size_t K = std::clamp<std::size_t>(L / 6U, 3U, 12U);
+        for (std::size_t i = 0; i < K && K < L; ++i) {
+            const std::size_t o = L - K + i;
+            const float t = static_cast<float>(i + 1U) / static_cast<float>(K + 1U);
+            for (std::size_t j = 0; j < J; ++j) OQ(o, j) = slerp(OQ(o, j), OQ(0, j), t);
+            out.root_translations[o].y += (out.root_translations[0].y - out.root_translations[o].y) * t;
+        }
         const float x0 = out.root_translations[0].x, z0 = out.root_translations[0].z;
-        for (auto &p : out.root_translations) p.x -= x0, p.z -= z0;
+        const float dx = out.root_translations[L - 1U].x - x0, dz = out.root_translations[L - 1U].z - z0;
+        for (std::size_t i = 0; i < L; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(L - 1U);
+            out.root_translations[i].x -= x0 + dx * t;
+            out.root_translations[i].z -= z0 + dz * t;
+        }
+        for (std::size_t j = 0; j < J; ++j)
+            report.seam_after_max_degrees = std::max(report.seam_after_max_degrees, angle_degrees(OQ(L - 1U, j), OQ(0, j)));
+        out.root_translations.push_back(out.root_translations.front());
+        for (std::size_t j = 0; j < J; ++j) out.local_rotations.push_back(out.local_rotations[j]);
     }
     for (std::size_t i = 0; i + 1U < L; ++i)
         for (std::size_t j = 0; j < J; ++j)
