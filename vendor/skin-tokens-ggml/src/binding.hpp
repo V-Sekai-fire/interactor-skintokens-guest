@@ -85,6 +85,13 @@ struct robust_transfer_options {
     // than this share of the part's vertex weight (0 = off). Small enough
     // that a fingertip on a whole-body mesh (~0.5%) still counts.
     float support_share = 0.001F;
+    // Closed separate parts that sit on one joint (bones of an anatomical
+    // skeleton, robot plates, buckles, clips) follow that joint at 100%, so
+    // they never bend (step 6b; rule in rigid_parts.hpp). Needs `joints`.
+    bool rigid_parts = true;
+    // Joint rest positions in the same normalized space as the vertices, one
+    // per skeleton joint. Empty turns step 6b off.
+    std::span<const vec3> joints;
     // Passes moving each row halfway to its one-ring mean (step 5b).
     std::size_t smooth_iterations = 15U;
     std::size_t candidates = 16U;
@@ -108,6 +115,8 @@ struct robust_transfer_options {
 //   5. clamp to [0, 1] and normalise;
 //   6. per separate mesh part, drop joints the skeleton connects to the part's
 //      strongest joint only through joints that carry no weight on it;
+//   6b. give each closed part that sits on one joint (grouped with its
+//      outline shell) its strongest joint at 100%;
 //   7. keep the four greatest and normalise. (Cutting joints
 //      far apart in the skeleton was tried and dropped: on a connected mesh the
 //      cut is a weight discontinuity that tears under motion.)
