@@ -1,0 +1,14 @@
+Copyright (c) 2026 K. S. Ernest (iFire) Lee. All rights reserved.
+
+This repository is licensed to K. S. Ernest (iFire) Lee, who may use, copy,
+modify, merge, publish, distribute, sublicense and sell it without limit.
+
+No licence is granted to anyone else. A free and open-source licence for this
+repository is not yet decided. Until one is stated in this file, being able to
+see the source does not give permission to use it.
+
+Files under vendor/ keep their own licences: vendor/skin-tokens-ggml/LICENSE
+and the MIT notice in vendor/nlohmann/json.hpp.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED.
