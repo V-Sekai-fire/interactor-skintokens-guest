@@ -374,9 +374,18 @@ private:
 // Recognizes the mesh-fitted humanoid core produced by unconstrained
 // SkinTokens generation. Short terminal subtrees below the hands are ignored,
 // allowing the generated rig to contain different numbers of finger branches.
+// The match is all-or-nothing: after the shape test, pass/fail gates (upright,
+// feet_below_hips, feet_point_forward, hands_out_to_sides) run in order and
+// the first failure is the error message. Left/right come from the feet's
+// facing, not from +X. A returned mapping always reports confidence 1.
 [[nodiscard]] SKINTOKENS_API result<humanoid_mapping> match_generated_humanoid(
     const skeleton & generated,
     const humanoid_match_options & options = {});
+
+// The humanoid match as one line of JSON, for callers outside C++ (the viewer, the CLI):
+// {"gates":"pass","roles":{"hips":"<joint name>",...}} with the 22 core roles, or
+// {"gates":"fail","why":"<first failed gate>"}.
+[[nodiscard]] SKINTOKENS_API std::string humanoid_roles_json(const skeleton & generated);
 
 // Transfers SOMA30 motion onto the generated hierarchy. The target hierarchy,
 // bind pose, and learned skin weights are not modified.

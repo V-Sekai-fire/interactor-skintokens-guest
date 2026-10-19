@@ -292,6 +292,30 @@ static Variant skintokens_vrm_start(String vrm1) {
 	return Variant(String("STARTED vrm"));
 }
 
+// Which joint of a rigged GLB plays which humanoid role, as the VRM export needs it: the result
+// is one line of JSON, {"gates":"pass","roles":{...}} or {"gates":"fail","why":...}. No model or GPU.
+static std::string g_humanoid;
+static void humanoid_job(void *) {
+	const std::vector<std::byte> bytes = read_whole(g_humanoid);
+	skintokens::result<skintokens::skinned_asset> asset = skintokens::load_skinned_glb_memory(bytes);
+	if (!asset) {
+		pump::fail("skintokens: humanoid: " + asset.error().message);
+	}
+	const std::string json = skintokens::humanoid_roles_json(asset->binding.rig);
+	g_result.assign(json.begin(), json.end());
+	logf_("humanoid: %zu joints, %zu bytes of roles", asset->binding.rig.names.size(), json.size());
+}
+
+static Variant skintokens_humanoid_start(String rigged) {
+	g_humanoid = rigged.utf8();
+	g_log.clear();
+	g_result.clear();
+	if (!pump::start(&humanoid_job, nullptr, size_t(16) << 20)) {
+		return Variant(String("FAIL a job is running"));
+	}
+	return Variant(String("STARTED humanoid"));
+}
+
 // A Kimodo clip from motion.elf onto the rigged file: cut it into a loop or a one-shot, move it
 // onto the rig and add it first, RESET kept. No model or GPU.
 struct MotionJob {
@@ -409,6 +433,7 @@ int main() {
 	ADD_API_FUNCTION(skintokens_attach, "String", "Object rd, int total_mb", "Attach the host's RenderingDevice");
 	ADD_API_FUNCTION(skintokens_start, "String", "String model_dir, String mesh_glb, String opts", "Rig a GLB on the pump");
 	ADD_API_FUNCTION(skintokens_vrm_start, "String", "String vrm1", "T-pose a VRM 1.0 and frame its joints on the pump");
+	ADD_API_FUNCTION(skintokens_humanoid_start, "String", "String rigged", "Match the joints of a rigged GLB to humanoid roles (JSON result) on the pump");
 	ADD_API_FUNCTION(skintokens_motion_start, "String", "String rigged, String name, String kind_seconds, String names, PackedInt32Array parents, PackedFloat32Array transforms, float fps", "Cut a motion.elf clip (loop|once seconds) and add it to a rigged GLB on the pump");
 	ADD_API_FUNCTION(skintokens_pump, "Array", "PackedByteArray data", "Resume the job once: [header, text, rid]");
 	ADD_API_FUNCTION(skintokens_result_size, "int", "", "Bytes of the rigged GLB");
