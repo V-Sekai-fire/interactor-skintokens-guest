@@ -334,8 +334,14 @@ static void motion_job(void *) {
 		pump::fail("skintokens: motion: " + generated.error().message);
 	}
 	generated->name = g_motion.name;
-	skintokens::result<std::pair<skintokens::motion, skintokens::clip_cut_report>> cut = skintokens::cut_clip(*generated,
-			g_motion.kind == "once" ? skintokens::clip_cut::once : skintokens::clip_cut::loop, g_motion.seconds);
+	// "whole" keeps every frame and the root's travel: a motion-matching database clip, whose
+	// frames must line up with the SOMA30 clip the matcher reads.
+	skintokens::result<std::pair<skintokens::motion, skintokens::clip_cut_report>> cut =
+			g_motion.kind == "whole"
+			? skintokens::result<std::pair<skintokens::motion, skintokens::clip_cut_report>>(
+					  std::pair<skintokens::motion, skintokens::clip_cut_report>{ *generated, { 0, generated->frames, 0, 0, 0, 0 } })
+			: skintokens::cut_clip(*generated,
+					  g_motion.kind == "once" ? skintokens::clip_cut::once : skintokens::clip_cut::loop, g_motion.seconds);
 	if (!cut) {
 		pump::fail("skintokens: cut: " + cut.error().message);
 	}
@@ -356,7 +362,7 @@ static void motion_job(void *) {
 			added->second.confidence, g_result.size());
 }
 
-// kind_seconds: "loop 1.1" or "once 2"; names one per line; transforms as motion.elf's motion_result.
+// kind_seconds: "loop 1.1", "once 2" or "whole" (no cut); names one per line; transforms as motion.elf's motion_result.
 static Variant skintokens_motion_start(String rigged, String name, String kind_seconds, String names,
 		PackedArray<int32_t> parents, PackedArray<float> transforms, double fps) {
 	g_motion = {};
@@ -366,8 +372,8 @@ static Variant skintokens_motion_start(String rigged, String name, String kind_s
 	const size_t sp = ks.find(' ');
 	g_motion.kind = ks.substr(0, sp);
 	g_motion.seconds = sp == std::string::npos ? 0.0F : std::strtof(ks.c_str() + sp + 1, nullptr);
-	if (g_motion.kind != "loop" && g_motion.kind != "once") {
-		return Variant(String("FAIL kind is loop or once, got " + ks));
+	if (g_motion.kind != "loop" && g_motion.kind != "once" && g_motion.kind != "whole") {
+		return Variant(String("FAIL kind is loop, once or whole, got " + ks));
 	}
 	const std::string nm = names.utf8();
 	for (size_t i = 0; i < nm.size();) {
@@ -434,7 +440,7 @@ int main() {
 	ADD_API_FUNCTION(skintokens_start, "String", "String model_dir, String mesh_glb, String opts", "Rig a GLB on the pump");
 	ADD_API_FUNCTION(skintokens_vrm_start, "String", "String vrm1", "T-pose a VRM 1.0 and frame its joints on the pump");
 	ADD_API_FUNCTION(skintokens_humanoid_start, "String", "String rigged", "Match the joints of a rigged GLB to humanoid roles (JSON result) on the pump");
-	ADD_API_FUNCTION(skintokens_motion_start, "String", "String rigged, String name, String kind_seconds, String names, PackedInt32Array parents, PackedFloat32Array transforms, float fps", "Cut a motion.elf clip (loop|once seconds) and add it to a rigged GLB on the pump");
+	ADD_API_FUNCTION(skintokens_motion_start, "String", "String rigged, String name, String kind_seconds, String names, PackedInt32Array parents, PackedFloat32Array transforms, float fps", "Cut a motion.elf clip (loop|once seconds|whole) and add it to a rigged GLB on the pump");
 	ADD_API_FUNCTION(skintokens_pump, "Array", "PackedByteArray data", "Resume the job once: [header, text, rid]");
 	ADD_API_FUNCTION(skintokens_result_size, "int", "", "Bytes of the rigged GLB");
 	ADD_API_FUNCTION(skintokens_result_chunk, "PackedByteArray", "int offset, int bytes", "Rigged GLB bytes (<= 8 MiB)");
