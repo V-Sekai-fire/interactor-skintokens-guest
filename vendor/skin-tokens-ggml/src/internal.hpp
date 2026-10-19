@@ -3,8 +3,8 @@
 #include <skintokens/skintokens.hpp>
 
 #if defined(__GNUC__)
-#  pragma GCC diagnostic push
-#  pragma GCC diagnostic ignored "-Wshadow"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wshadow"
 #endif
 #include <ggml.h>
 #include <ggml-alloc.h>
@@ -12,7 +12,7 @@
 #include <ggml-cpu.h>
 #include <gguf.h>
 #if defined(__GNUC__)
-#  pragma GCC diagnostic pop
+#pragma GCC diagnostic pop
 #endif
 
 #include <cstdint>
@@ -33,7 +33,7 @@ namespace skintokens::detail {
 
 [[nodiscard]] inline bool profiling_enabled() noexcept {
     static const bool enabled = [] {
-        const char * value = std::getenv("SKINTOKENS_PROFILE");
+        const char *value = std::getenv("SKINTOKENS_PROFILE");
         return value != nullptr && *value != '\0' && std::string_view{value} != "0";
     }();
     return enabled;
@@ -42,7 +42,7 @@ namespace skintokens::detail {
 inline void profile_record(std::string_view label, double milliseconds) noexcept {
     if (!profiling_enabled()) return;
     std::fprintf(stderr, "[skintokens-profile] %.*s ms=%.3f\n",
-                 static_cast<int>(label.size()), label.data(), milliseconds);
+        static_cast<int>(label.size()), label.data(), milliseconds);
 }
 
 class profile_scope {
@@ -50,18 +50,19 @@ public:
     explicit profile_scope(std::string_view label) noexcept
         : label_(label), start_(std::chrono::steady_clock::now()) {}
     profile_scope(const profile_scope &) = delete;
-    profile_scope & operator=(const profile_scope &) = delete;
+    profile_scope &operator=(const profile_scope &) = delete;
     ~profile_scope() {
         const auto elapsed = std::chrono::steady_clock::now() - start_;
         profile_record(label_, std::chrono::duration<double, std::milli>(elapsed).count());
     }
+
 private:
     std::string_view label_;
     std::chrono::steady_clock::time_point start_;
 };
 
 template<class Function>
-auto profiled(std::string_view label, Function && function) {
+auto profiled(std::string_view label, Function &&function) {
     const auto start = std::chrono::steady_clock::now();
     auto output = std::forward<Function>(function)();
     const auto elapsed = std::chrono::steady_clock::now() - start;
@@ -73,7 +74,7 @@ auto profiled(std::string_view label, Function && function) {
     return error{code, std::move(message)};
 }
 
-[[nodiscard]] inline bool checked_mul(std::size_t a, std::size_t b, std::size_t & result) {
+[[nodiscard]] inline bool checked_mul(std::size_t a, std::size_t b, std::size_t &result) {
     if (a != 0 && b > std::numeric_limits<std::size_t>::max() / a) return false;
     result = a * b;
     return true;
@@ -84,12 +85,12 @@ struct backend_handle {
     std::string name;
     backend_handle() = default;
     backend_handle(const backend_handle &) = delete;
-    backend_handle & operator=(const backend_handle &) = delete;
+    backend_handle &operator=(const backend_handle &) = delete;
     ~backend_handle();
 };
 
 [[nodiscard]] result<std::unique_ptr<backend_handle>> make_backend(
-    const runtime_options & options);
+    const runtime_options &options);
 
 struct bundle_metadata {
     std::string architecture;
@@ -102,37 +103,37 @@ struct bundle_metadata {
 };
 
 struct weight_component {
-    ggml_context * context = nullptr;
-    gguf_context * file = nullptr;
+    ggml_context *context = nullptr;
+    gguf_context *file = nullptr;
     ggml_backend_buffer_t buffer = nullptr;
     std::filesystem::path path;
     weight_component() = default;
     weight_component(const weight_component &) = delete;
-    weight_component & operator=(const weight_component &) = delete;
+    weight_component &operator=(const weight_component &) = delete;
     ~weight_component();
-    [[nodiscard]] ggml_tensor * tensor(std::string_view name) const;
+    [[nodiscard]] ggml_tensor *tensor(std::string_view name) const;
 };
 
 [[nodiscard]] result<std::unique_ptr<weight_component>> load_component(
-    const std::filesystem::path & path, ggml_backend_t backend, const file_source & files = {});
+    const std::filesystem::path &path, ggml_backend_t backend, const file_source &files = {});
 
 [[nodiscard]] result<bundle_metadata> inspect_gguf(
-    const std::filesystem::path & path, const file_source & files = {});
+    const std::filesystem::path &path, const file_source &files = {});
 
 // A [rows, data] slice of `weight`'s output rows, plus the matching bias slice when given.
-[[nodiscard]] ggml_tensor * rows_linear(ggml_context * context, ggml_tensor * weight, ggml_tensor * bias,
-                                        std::int64_t first_row, std::int64_t rows, ggml_tensor * input);
+[[nodiscard]] ggml_tensor *rows_linear(ggml_context *context, ggml_tensor *weight, ggml_tensor *bias,
+    std::int64_t first_row, std::int64_t rows, ggml_tensor *input);
 
 // Multi-head attention one head at a time, queries in blocks, so no intermediate exceeds
 // 64 MiB. q is [heads * head_dim, queries]; head_kv(h) returns [2 * head_dim, data] (K rows,
 // then V rows). Returns [heads * head_dim, queries].
-[[nodiscard]] ggml_tensor * attend_by_head(ggml_context * context, ggml_tensor * q, std::int64_t heads,
-                                           std::int64_t head_dim, std::int64_t data_count,
-                                           const std::function<ggml_tensor *(std::int64_t head)> & head_kv);
+[[nodiscard]] ggml_tensor *attend_by_head(ggml_context *context, ggml_tensor *q, std::int64_t heads,
+    std::int64_t head_dim, std::int64_t data_count,
+    const std::function<ggml_tensor *(std::int64_t head)> &head_kv);
 
 // An istream over a file, or over file_source::read when it is set.
 [[nodiscard]] std::unique_ptr<std::istream> open_source(
-    const std::filesystem::path & path, const file_source & files);
+    const std::filesystem::path &path, const file_source &files);
 
 using tensor_snapshot = std::unordered_map<std::string, std::vector<float>>;
 
@@ -140,22 +141,22 @@ using tensor_snapshot = std::unordered_map<std::string, std::vector<float>>;
 // recorded in NOTICE. It is expressed here against GGML directly; no llama.cpp
 // source or runtime is linked into this project.
 [[nodiscard]] result<tensor_snapshot> run_qwen_layer0(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const float> input, std::size_t sequence);
 
 [[nodiscard]] result<std::vector<float>> run_qwen_layer(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const float> input, std::size_t sequence, std::size_t layer);
 
 [[nodiscard]] result<std::vector<float>> run_qwen_head(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const float> input, std::size_t sequence);
 
 [[nodiscard]] result<std::vector<std::int32_t>> generate_skin_codes(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const float> mesh_embeddings,
     std::span<const std::int32_t> skeleton_tokens,
-    std::size_t joint_count, const generation_options & options);
+    std::size_t joint_count, const generation_options &options);
 
 struct generated_rig_tokens {
     std::vector<std::int32_t> skeleton_tokens;
@@ -167,29 +168,29 @@ struct generated_rig_tokens {
 // generated joint. This is the checkpoint's normal, unconstrained TokenRig
 // route; supplied-skeleton generation above is a separate diagnostic lane.
 [[nodiscard]] result<generated_rig_tokens> generate_rig_tokens(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const float> mesh_embeddings,
-    const generation_options & options);
+    const generation_options &options);
 
 [[nodiscard]] result<std::vector<float>> run_qwen_logits(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const float> mesh_embeddings,
     std::span<const std::int32_t> tokens);
 
 [[nodiscard]] result<std::vector<float>> run_qwen_logits_batch(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const float> mesh_embeddings,
     std::span<const std::int32_t> tokens,
     std::size_t token_count, std::size_t batch_size);
 
 [[nodiscard]] result<std::vector<float>> run_qwen_kv_trajectory(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const float> mesh_embeddings,
     std::span<const std::int32_t> prefix,
     std::span<const std::int32_t> continuation);
 
 [[nodiscard]] result<std::vector<float>> run_qwen_kv_branches(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const float> mesh_embeddings,
     std::span<const std::int32_t> prefix,
     std::span<const std::int32_t> branch_tokens);
@@ -202,31 +203,31 @@ struct skeleton_prefix {
 };
 
 [[nodiscard]] result<skeleton_prefix> tokenize_skeleton_prefix(
-    const mesh & source, const skeleton & target);
+    const mesh &source, const skeleton &target);
 
 [[nodiscard]] result<skeleton> detokenize_generated_skeleton(
     std::span<const std::int32_t> tokens, vec3 center, float scale);
 
 [[nodiscard]] result<tensor_snapshot> run_mesh_encoder_fixture(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const float> points, std::span<const float> normals);
 
 [[nodiscard]] result<std::vector<float>> encode_mesh(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const vec3> points, std::span<const vec3> normals,
     std::span<const std::int32_t> query_indices);
 
 [[nodiscard]] result<tensor_snapshot> run_skin_vae_fixture(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const float> points, std::span<const float> normals);
 
 [[nodiscard]] result<std::vector<float>> encode_skin_condition(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const vec3> points, std::span<const vec3> normals,
     std::span<const std::int32_t> query_indices);
 
 [[nodiscard]] result<std::vector<float>> decode_skin_joint(
-    const weight_component & weights, ggml_backend_t backend,
+    const weight_component &weights, ggml_backend_t backend,
     std::span<const std::int32_t> codes, std::span<const float> condition_latents,
     std::span<const vec3> points, std::span<const vec3> normals);
 

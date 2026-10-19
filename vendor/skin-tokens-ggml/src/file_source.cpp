@@ -8,7 +8,7 @@ namespace {
 
 class source_buffer final : public std::streambuf {
 public:
-    source_buffer(std::filesystem::path path, const file_source & files)
+    source_buffer(std::filesystem::path path, const file_source &files)
         : path_(std::move(path)), files_(files), window_(1U << 20U) {}
 
 protected:
@@ -44,14 +44,14 @@ protected:
 
 private:
     std::filesystem::path path_;
-    const file_source & files_;
+    const file_source &files_;
     std::vector<char> window_;
     std::uint64_t start_ = 0;
 };
 
 class source_stream final : public std::istream {
 public:
-    source_stream(std::filesystem::path path, const file_source & files)
+    source_stream(std::filesystem::path path, const file_source &files)
         : std::istream(nullptr), buffer_(std::move(path), files) { rdbuf(&buffer_); }
 
 private:
@@ -60,7 +60,7 @@ private:
 
 } // namespace
 
-std::unique_ptr<std::istream> open_source(const std::filesystem::path & path, const file_source & files) {
+std::unique_ptr<std::istream> open_source(const std::filesystem::path &path, const file_source &files) {
     if (files.read) return std::make_unique<source_stream>(path, files);
     return std::make_unique<std::ifstream>(path, std::ios::binary);
 }

@@ -14,17 +14,17 @@
 #include <vector>
 
 #if defined(SKINTOKENS_SHARED)
-#  if defined(_WIN32) && !defined(__MINGW32__)
-#    if defined(SKINTOKENS_BUILD)
-#      define SKINTOKENS_API __declspec(dllexport)
-#    else
-#      define SKINTOKENS_API __declspec(dllimport)
-#    endif
-#  else
-#    define SKINTOKENS_API __attribute__((visibility("default")))
-#  endif
+#if defined(_WIN32) && !defined(__MINGW32__)
+#if defined(SKINTOKENS_BUILD)
+#define SKINTOKENS_API __declspec(dllexport)
 #else
-#  define SKINTOKENS_API
+#define SKINTOKENS_API __declspec(dllimport)
+#endif
+#else
+#define SKINTOKENS_API __attribute__((visibility("default")))
+#endif
+#else
+#define SKINTOKENS_API
 #endif
 
 struct ggml_tensor;
@@ -50,7 +50,8 @@ struct error {
     std::string message;
 };
 
-template<class T> using result = std::expected<T, error>;
+template<class T>
+using result = std::expected<T, error>;
 
 struct vec3 {
     float x = 0.0F;
@@ -102,13 +103,17 @@ struct motion {
     std::string name;
 };
 
-enum class rig_kind : std::uint8_t { unknown, soma30, mixamo52 };
+enum class rig_kind : std::uint8_t { unknown,
+    soma30,
+    mixamo52 };
 
 // How a separately supplied skeleton is placed into a mesh coordinate system.
 // `global_similarity` preserves every relative joint position. `articulated`
 // may instead adopt the clip's own first frame as the rest pose, and reposes
 // recognized limb chains that still miss the mesh. Both preserve bone lengths.
-enum class skeleton_fit : std::uint8_t { none, global_similarity, articulated };
+enum class skeleton_fit : std::uint8_t { none,
+    global_similarity,
+    articulated };
 
 struct glb_info {
     bool has_mesh = false;
@@ -130,7 +135,8 @@ struct retarget_report {
     float foot_velocity_relative_error = 0.0F;
 };
 
-enum class finger_transfer : std::uint8_t { neutral, map_soma_endpoints };
+enum class finger_transfer : std::uint8_t { neutral,
+    map_soma_endpoints };
 
 enum class semantic_role : std::uint8_t {
     unmapped,
@@ -229,19 +235,23 @@ struct skinned_asset {
     motion animation;
 };
 
-enum class device_kind : std::uint8_t { automatic, cpu, vulkan };
+enum class device_kind : std::uint8_t { automatic,
+    cpu,
+    vulkan };
 
 // Where model files come from when the process cannot open them itself (a
 // sandboxed guest). Empty members fall back to the file system.
 struct file_source {
     // Copy the bytes at `offset` of `path` into `output`; returns how many it
     // copied, fewer than output.size() only at the end of the file.
-    std::function<std::size_t(const std::filesystem::path & path, std::uint64_t offset,
-                              std::span<std::byte> output)> read;
+    std::function<std::size_t(const std::filesystem::path &path, std::uint64_t offset,
+        std::span<std::byte> output)>
+        read;
     // Optional: put a weight tensor's bytes, stored at `offset` of `path`,
     // straight into its backend buffer.
-    std::function<bool(ggml_tensor * tensor, const std::filesystem::path & path,
-                       std::uint64_t offset)> load_tensor;
+    std::function<bool(ggml_tensor *tensor, const std::filesystem::path &path,
+        std::uint64_t offset)>
+        load_tensor;
 };
 
 struct runtime_options {
@@ -250,7 +260,7 @@ struct runtime_options {
     std::filesystem::path backend_directory;
     file_source files;
     // A device the caller registered; skips backend discovery when set.
-    ggml_backend_device * device_handle = nullptr;
+    ggml_backend_device *device_handle = nullptr;
 };
 
 struct generation_options {
@@ -276,25 +286,25 @@ struct generation_options {
 class SKINTOKENS_API model final {
 public:
     model(model &&) noexcept;
-    model & operator=(model &&) noexcept;
+    model &operator=(model &&) noexcept;
     model(const model &) = delete;
-    model & operator=(const model &) = delete;
+    model &operator=(const model &) = delete;
     ~model();
 
     [[nodiscard]] static result<model> load(
-        const std::filesystem::path & bundle,
-        const runtime_options & options = {});
+        const std::filesystem::path &bundle,
+        const runtime_options &options = {});
 
     [[nodiscard]] result<skin> rig(
-        const mesh & source,
-        const generation_options & options = {}) const;
+        const mesh &source,
+        const generation_options &options = {}) const;
 
     // Preferred Kimodo integration: the supplied skeleton is emitted as a
     // constrained TokenRig prefix, so inference generates skin weights only.
     [[nodiscard]] result<skin> bind(
-        const mesh & source,
-        const skeleton & target,
-        const generation_options & options = {}) const;
+        const mesh &source,
+        const skeleton &target,
+        const generation_options &options = {}) const;
 
     [[nodiscard]] std::string_view backend_name() const noexcept;
 
@@ -305,7 +315,7 @@ private:
 };
 
 [[nodiscard]] SKINTOKENS_API result<mesh> load_glb_file(
-    const std::filesystem::path & path);
+    const std::filesystem::path &path);
 
 [[nodiscard]] SKINTOKENS_API result<mesh> load_glb_memory(
     std::span<const std::byte> bytes);
@@ -313,27 +323,27 @@ private:
 // Reads trellis2cpp's versioned persisted mesh format directly. Coordinates
 // and PBR vertex colours are converted exactly as its portable GLB exporter.
 [[nodiscard]] SKINTOKENS_API result<mesh> load_trellis_mesh_file(
-    const std::filesystem::path & path);
+    const std::filesystem::path &path);
 
 [[nodiscard]] SKINTOKENS_API result<motion> load_kimodo_glb_file(
-    const std::filesystem::path & path);
+    const std::filesystem::path &path);
 
 // Loads the joint hierarchy and rest pose from a glTF skin. Animation is
 // optional; static armatures are represented by one identity rest frame.
 [[nodiscard]] SKINTOKENS_API result<motion> load_skeleton_glb_file(
-    const std::filesystem::path & path);
+    const std::filesystem::path &path);
 
 // Loads mesh geometry, JOINTS_0/WEIGHTS_0, skeleton, and optional animation
 // from one bounded GLB. This enables model-independent motion retargeting of a
 // previously generated SkinTokens asset.
 [[nodiscard]] SKINTOKENS_API result<skinned_asset> load_skinned_glb_file(
-    const std::filesystem::path & path);
+    const std::filesystem::path &path);
 [[nodiscard]] SKINTOKENS_API result<skinned_asset> load_skinned_glb_memory(
     std::span<const std::byte> bytes);
 
 // Performs bounded structural inspection without loading model weights.
 [[nodiscard]] SKINTOKENS_API result<glb_info> inspect_glb_file(
-    const std::filesystem::path & path);
+    const std::filesystem::path &path);
 
 // World rest rotation of each joint: its +Y runs along its bone (glTF and RCSF joint
 // orientation). Writers bake these into the rest pose; deformation does not change.
@@ -344,17 +354,17 @@ private:
 // arms and fingers along +-X, legs down; the mesh is skinned into the pose and bound there.
 [[nodiscard]] SKINTOKENS_API result<std::vector<std::byte>> pose_to_t_pose_glb_memory(std::span<const std::byte> bytes);
 [[nodiscard]] SKINTOKENS_API result<std::vector<std::byte>> reframe_skin_joints_glb_memory(std::span<const std::byte> bytes);
-[[nodiscard]] SKINTOKENS_API std::vector<quat> joint_rest_frames(const skeleton & rig);
+[[nodiscard]] SKINTOKENS_API std::vector<quat> joint_rest_frames(const skeleton &rig);
 // The same, with an optional aim point per joint that overrides the child it points at.
-[[nodiscard]] SKINTOKENS_API std::vector<quat> joint_rest_frames(const skeleton & rig,
-    const std::vector<std::optional<vec3>> & aims);
-[[nodiscard]] SKINTOKENS_API rig_kind identify_rig(const skeleton & value);
+[[nodiscard]] SKINTOKENS_API std::vector<quat> joint_rest_frames(const skeleton &rig,
+    const std::vector<std::optional<vec3>> &aims);
+[[nodiscard]] SKINTOKENS_API rig_kind identify_rig(const skeleton &value);
 
 // Uniformly fits a motion rig to the mesh's vertical extent and centre while
 // preserving every bone length ratio. This is the conservative default for a
 // motion-only Kimodo skeleton and a separately generated character.
 [[nodiscard]] SKINTOKENS_API result<motion> fit_motion_to_mesh(
-    const mesh & geometry, const motion & animation);
+    const mesh &geometry, const motion &animation);
 
 // Explicit fit selection. The articulated mode first chooses between the
 // supplied rest pose and the clip's own first frame by which one actually runs
@@ -363,13 +373,13 @@ private:
 // the bind pose and frame zero identical, so playback starts without warping
 // the mesh. Every mode preserves the globally scaled length of every bone.
 [[nodiscard]] SKINTOKENS_API result<motion> fit_motion_to_mesh(
-    const mesh & geometry, const motion & animation, skeleton_fit fit);
+    const mesh &geometry, const motion &animation, skeleton_fit fit);
 
 // Transfers a motion onto a mesh-specific SkinTokens rig by matching its
 // generated rest-pose topology and normalized joint positions. Root travel is
 // scaled to the target rig while local rotations remain frame-exact.
 [[nodiscard]] SKINTOKENS_API result<motion> retarget_motion_to_rig(
-    const motion & animation, const skeleton & target);
+    const motion &animation, const skeleton &target);
 
 // Recognizes the mesh-fitted humanoid core produced by unconstrained
 // SkinTokens generation. Short terminal subtrees below the hands are ignored,
@@ -379,78 +389,78 @@ private:
 // the first failure is the error message. Left/right come from the feet's
 // facing, not from +X. A returned mapping always reports confidence 1.
 [[nodiscard]] SKINTOKENS_API result<humanoid_mapping> match_generated_humanoid(
-    const skeleton & generated,
-    const humanoid_match_options & options = {});
+    const skeleton &generated,
+    const humanoid_match_options &options = {});
 
 // The humanoid match as one line of JSON, for callers outside C++ (the viewer, the CLI):
 // {"gates":"pass","roles":{"hips":"<joint name>",...}} with the 22 core roles, or
 // {"gates":"fail","why":"<first failed gate>"}.
-[[nodiscard]] SKINTOKENS_API std::string humanoid_roles_json(const skeleton & generated);
+[[nodiscard]] SKINTOKENS_API std::string humanoid_roles_json(const skeleton &generated);
 
 // Transfers SOMA30 motion onto the generated hierarchy. The target hierarchy,
 // bind pose, and learned skin weights are not modified.
 [[nodiscard]] SKINTOKENS_API result<motion> retarget_soma30_motion_to_generated(
-    const motion & soma30,
-    const skeleton & generated,
-    const humanoid_mapping & mapping,
-    const retarget_options & options = {});
+    const motion &soma30,
+    const skeleton &generated,
+    const humanoid_mapping &mapping,
+    const retarget_options &options = {});
 
 // Compares motion rather than raw proportions: each corresponding joint is
 // root-relative, height-normalized, and measured against its own rest pose.
 [[nodiscard]] SKINTOKENS_API result<motion_divergence_report>
 compare_soma30_to_generated(
-    const motion & soma30,
-    const motion & generated,
-    const humanoid_mapping & mapping);
+    const motion &soma30,
+    const motion &generated,
+    const humanoid_mapping &mapping);
 
 [[nodiscard]] SKINTOKENS_API result<humanoid_match_report> retarget_soma30_glb_file(
-    const std::filesystem::path & generated_rigged_glb,
-    const std::filesystem::path & soma30_motion_glb,
-    const std::filesystem::path & output_glb,
-    const humanoid_match_options & match_options = {},
-    const retarget_options & options = {});
+    const std::filesystem::path &generated_rigged_glb,
+    const std::filesystem::path &soma30_motion_glb,
+    const std::filesystem::path &output_glb,
+    const humanoid_match_options &match_options = {},
+    const retarget_options &options = {});
 
 // Builds SkinTokens' published Mixamo52 topology from an already fitted
 // SOMA30 rest rig. Body joints are mapped anatomically; SOMA's hand endpoints
 // anchor deterministic neutral finger chains.
 [[nodiscard]] SKINTOKENS_API result<skeleton> make_mixamo52_rig(
-    const skeleton & fitted_soma30);
+    const skeleton &fitted_soma30);
 
 // Explicit semantic SOMA30 -> Mixamo52 transfer. Unlike the generic fallback
 // above, this never selects joints by spatial proximity.
 [[nodiscard]] SKINTOKENS_API result<motion> retarget_soma30_to_mixamo52(
-    const motion & animation, const skeleton & mixamo52);
+    const motion &animation, const skeleton &mixamo52);
 
 // Runs deterministic +/- joint-isolation probes and compares a complete clip
 // in root-relative normalized model space. Lower errors indicate that the
 // manual mapping preserves source joint trajectories.
 [[nodiscard]] SKINTOKENS_API result<retarget_report> validate_soma30_to_mixamo52(
-    const motion & animation, const skeleton & mixamo52);
+    const motion &animation, const skeleton &mixamo52);
 
 // Compares two already-exported/re-imported clips. This closes the validation
 // loop around GLB serialization instead of checking only in-memory transfer.
 [[nodiscard]] SKINTOKENS_API result<retarget_report> compare_soma30_to_mixamo52(
-    const motion & soma30_animation, const motion & mixamo52_animation);
+    const motion &soma30_animation, const motion &mixamo52_animation);
 
 // Evaluates the same glTF linear-blend skinning transform emitted by
 // save_skinned_animation_glb_file at an exact animation frame. This is useful
 // for render-independent parity tests and offline vertex export.
 [[nodiscard]] SKINTOKENS_API result<std::vector<vec3>> deform_vertices(
-    const mesh & geometry,
-    const skin & binding,
-    const motion & animation,
+    const mesh &geometry,
+    const skin &binding,
+    const motion &animation,
     std::size_t frame);
 
 [[nodiscard]] SKINTOKENS_API result<void> save_skinned_animation_glb_file(
-    const std::filesystem::path & path,
-    const mesh & geometry,
-    const skin & binding,
-    const motion & animation);
+    const std::filesystem::path &path,
+    const mesh &geometry,
+    const skin &binding,
+    const motion &animation);
 
 [[nodiscard]] SKINTOKENS_API result<std::vector<std::byte>> save_skinned_animation_glb_memory(
-    const mesh & geometry,
-    const skin & binding,
-    const motion & animation);
+    const mesh &geometry,
+    const skin &binding,
+    const motion &animation);
 
 // Rigs the source GLB itself: its materials, textures, UVs, normals, tangents, morph targets and
 // extensions stay, and the joints, a skin and the clip are added. `binding` must come from the mesh
@@ -459,22 +469,22 @@ compare_soma30_to_generated(
 // because they drive a skeleton that no longer moves these vertices.
 [[nodiscard]] SKINTOKENS_API result<std::vector<std::byte>> save_rigged_source_glb_memory(
     std::span<const std::byte> source,
-    const skin & binding,
-    const motion & animation);
+    const skin &binding,
+    const motion &animation);
 
 // Adds `animation` to a GLB that already holds its skin (for example a rigged character from
 // save_rigged_source_glb_memory): everything else in the file stays. Its joints are found by name
 // among the skin's; a clip of the same name is replaced, other clips (such as RESET) stay.
 [[nodiscard]] SKINTOKENS_API result<std::vector<std::byte>> add_animation_glb_memory(
     std::span<const std::byte> rigged,
-    const motion & animation);
+    const motion &animation);
 
 // A SOMA30 clip in motion.elf's layout (interactor-motion-guest motion_result): per frame, per
 // joint, the parent-local row-major 3x3 (column vectors) then the translation; the root's
 // translation is its position, the others their rest offset. Rest = T-pose (identity rotations).
 [[nodiscard]] SKINTOKENS_API result<motion> soma30_motion_from_transforms(
-    const std::vector<std::string> & names,
-    const std::vector<std::int32_t> & parents,
+    const std::vector<std::string> &names,
+    const std::vector<std::int32_t> &parents,
     float frames_per_second,
     std::span<const float> transforms);
 
@@ -485,25 +495,26 @@ compare_soma30_to_generated(
 //         travel removed, and frame 0 repeated at the end so a player wraps over one frame.
 //   once: the action, from just before the motion rises above 15% of its peak to just after it
 //         falls below, plus six settle frames each side.
-enum class clip_cut : std::uint8_t { loop, once };
+enum class clip_cut : std::uint8_t { loop,
+    once };
 struct clip_cut_report {
     std::size_t start = 0;
-    std::size_t frames = 0;           // without the repeated wrap frame
+    std::size_t frames = 0; // without the repeated wrap frame
     float seam_before_max_degrees = 0.0F;
     float seam_after_max_degrees = 0.0F;
     float largest_step_degrees = 0.0F; // the largest frame-to-frame joint turn inside the clip
     float travel_removed_metres_per_second = 0.0F;
 };
 [[nodiscard]] SKINTOKENS_API result<std::pair<motion, clip_cut_report>> cut_clip(
-    const motion & generated, clip_cut kind, float seconds);
+    const motion &generated, clip_cut kind, float seconds);
 
 // The whole viewer step: match the rigged file's skeleton to the humanoid, move the SOMA30 clip
 // onto it and add it to the file (first, RESET kept), named animation.name.
 [[nodiscard]] SKINTOKENS_API result<std::pair<std::vector<std::byte>, humanoid_match_report>>
 add_soma30_motion_glb_memory(
     std::span<const std::byte> rigged,
-    const motion & soma30,
-    const humanoid_match_options & match_options = {},
-    const retarget_options & options = {});
+    const motion &soma30,
+    const humanoid_match_options &match_options = {},
+    const retarget_options &options = {});
 
 } // namespace skintokens

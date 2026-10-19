@@ -16,7 +16,7 @@ std::int32_t discrete(float value) {
 
 } // namespace
 
-result<skeleton_prefix> tokenize_skeleton_prefix(const mesh & source, const skeleton & target) {
+result<skeleton_prefix> tokenize_skeleton_prefix(const mesh &source, const skeleton &target) {
     if (source.vertices.empty() || target.rest_positions.empty() ||
         target.parents.size() != target.rest_positions.size())
         return std::unexpected(fail(error_code::invalid_argument, "cannot tokenize empty mesh/skeleton"));
@@ -29,8 +29,8 @@ result<skeleton_prefix> tokenize_skeleton_prefix(const mesh & source, const skel
             high[axis] = std::max(high[axis], precise[axis]);
         }
     };
-    for (const auto & value : source.vertices) include(value);
-    for (const auto & value : target.rest_positions) include(value);
+    for (const auto &value : source.vertices) include(value);
+    for (const auto &value : target.rest_positions) include(value);
     const double half_extent = std::max({high[0] - low[0], high[1] - low[1], high[2] - low[2]}) * 0.5;
     if (!std::isfinite(half_extent) || half_extent <= 1e-12)
         return std::unexpected(fail(error_code::invalid_argument, "mesh/skeleton bounds are degenerate"));
@@ -49,17 +49,17 @@ result<skeleton_prefix> tokenize_skeleton_prefix(const mesh & source, const skel
     const auto normalized = [&](vec3 value) {
         const auto precise = precise_normalized(value);
         return vec3{static_cast<float>(precise[0]), static_cast<float>(precise[1]),
-                    static_cast<float>(precise[2])};
+            static_cast<float>(precise[2])};
     };
     skeleton_prefix output;
     output.normalized_vertices.reserve(source.vertices.size());
     output.precise_normalized_vertices.reserve(source.vertices.size());
-    for (const auto & value : source.vertices) {
+    for (const auto &value : source.vertices) {
         output.normalized_vertices.push_back(normalized(value));
         output.precise_normalized_vertices.push_back(precise_normalized(value));
     }
     output.normalized_joints.reserve(target.rest_positions.size());
-    for (const auto & value : target.rest_positions) output.normalized_joints.push_back(normalized(value));
+    for (const auto &value : target.rest_positions) output.normalized_joints.push_back(normalized(value));
 
     // Match the released executable path, including its configuration quirk:
     // imported demo assets use class articulation=266, but TokenizerPart.parse
@@ -68,8 +68,10 @@ result<skeleton_prefix> tokenize_skeleton_prefix(const mesh & source, const skel
     // official supplied-skeleton capture starts [257, 266, coordinates...].
     output.tokens = {257, 266};
     std::int32_t previous = -1;
-    const auto append = [&](vec3 value, std::vector<std::int32_t> & tokens) {
-        tokens.push_back(discrete(value.x)); tokens.push_back(discrete(value.y)); tokens.push_back(discrete(value.z));
+    const auto append = [&](vec3 value, std::vector<std::int32_t> &tokens) {
+        tokens.push_back(discrete(value.x));
+        tokens.push_back(discrete(value.y));
+        tokens.push_back(discrete(value.z));
     };
     for (std::size_t joint = 0; joint < output.normalized_joints.size(); ++joint) {
         const std::int32_t parent = target.parents[joint];
@@ -99,8 +101,8 @@ result<skeleton> detokenize_generated_skeleton(
     const auto point = [&](std::size_t offset) {
         if (offset + 3U > tokens.size()) throw std::runtime_error("truncated skeleton coordinate");
         return vec3{coordinate(tokens[offset]) * scale + center.x,
-                    coordinate(tokens[offset + 1U]) * scale + center.y,
-                    coordinate(tokens[offset + 2U]) * scale + center.z};
+            coordinate(tokens[offset + 1U]) * scale + center.y,
+            coordinate(tokens[offset + 2U]) * scale + center.z};
     };
     skeleton output;
     std::size_t cursor = 1U;
@@ -109,11 +111,23 @@ result<skeleton> detokenize_generated_skeleton(
     while (cursor + 1U < tokens.size()) {
         const auto token = tokens[cursor];
         if (token == 258) break;
-        if (token == 256) { branch = true; previous.reset(); ++cursor; continue; }
-        if (token >= 260 && token <= 266) { ++cursor; continue; }
+        if (token == 256) {
+            branch = true;
+            previous.reset();
+            ++cursor;
+            continue;
+        }
+        if (token >= 260 && token <= 266) {
+            ++cursor;
+            continue;
+        }
         vec3 parent_point{};
-        if (branch) { parent_point = point(cursor); cursor += 3U; }
-        const vec3 current = point(cursor); cursor += 3U;
+        if (branch) {
+            parent_point = point(cursor);
+            cursor += 3U;
+        }
+        const vec3 current = point(cursor);
+        cursor += 3U;
         if (!branch) parent_point = previous.value_or(current);
         std::int32_t parent = -1;
         if (!output.rest_positions.empty()) {
@@ -122,8 +136,11 @@ result<skeleton> detokenize_generated_skeleton(
                 const auto candidate = output.rest_positions[index];
                 const float x = candidate.x - parent_point.x, y = candidate.y - parent_point.y,
                             z = candidate.z - parent_point.z;
-                const float distance = x*x + y*y + z*z;
-                if (distance < best) { best = distance; parent = static_cast<std::int32_t>(index); }
+                const float distance = x * x + y * y + z * z;
+                if (distance < best) {
+                    best = distance;
+                    parent = static_cast<std::int32_t>(index);
+                }
             }
         }
         output.names.push_back("bone_" + std::to_string(output.names.size()));
@@ -135,7 +152,7 @@ result<skeleton> detokenize_generated_skeleton(
     if (output.names.empty() || output.names.size() > 256U)
         return std::unexpected(fail(error_code::compute, "TokenRig generated an empty or oversized skeleton"));
     return output;
-} catch (const std::exception & exception) {
+} catch (const std::exception &exception) {
     return std::unexpected(fail(error_code::compute, exception.what()));
 }
 
