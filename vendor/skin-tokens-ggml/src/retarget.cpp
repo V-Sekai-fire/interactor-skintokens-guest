@@ -459,13 +459,47 @@ result<humanoid_mapping> match_generated_humanoid(
         return std::unexpected(detail::fail(error_code::invalid_argument,
             "generated skeleton does not have two leg chains"));
 
-    const auto left_first=[](const auto & pair,const skeleton & rig) {
-        // VROID/SkinTokens and Kimodo use +X for the character's anatomical
-        // left (the viewer sees it on screen-right in a front view).
-        return rig.rest_positions[pair[0].front()].x>rig.rest_positions[pair[1].front()].x;
+    // Gates, each pass/fail, checked in this order; the first failure rejects the rig with its
+    // name. They are measured against the hips-to-head distance (stature) and the model's own
+    // facing (from the feet), so a source facing +X passes the same gates as one facing +Z.
+    const auto & at=generated.rest_positions;
+    const vec3 hips_position=at[root];
+    const float stature=std::max(distance(hips_position,at[head.back()]),1.0e-6F);
+    const auto gate=[](const char * name,const char * why) {
+        return std::unexpected(detail::fail(error_code::invalid_argument,
+            std::string("humanoid gate failed: ")+name+" ("+why+")"));
     };
-    if (!left_first(arm_candidates,generated)) std::swap(arm_candidates[0],arm_candidates[1]);
-    if (!left_first(legs,generated)) std::swap(legs[0],legs[1]);
+    if (at[head.back()].y<=hips_position.y+.2F*stature)
+        return gate("upright","the head is not above the hips");
+    for (const auto & leg:legs)
+        if (at[leg.back()].y>=hips_position.y-.15F*stature)
+            return gate("feet_below_hips","a foot is not below the hips");
+    std::array<vec3,2> toe_dirs{};
+    for (std::size_t i=0;i<2U;++i) {
+        toe_dirs[i]=sub(at[legs[i][3]],at[legs[i][2]]);
+        toe_dirs[i].y=0.0F;
+        if (length(toe_dirs[i])<1.0e-3F*stature)
+            return gate("feet_point_forward","a toe does not point away from its foot");
+    }
+    // Forward is the sum of the two toe directions: toe-in or toe-out feet cancel sideways and
+    // still agree on forward. Each toe must lie within 90 degrees of it, and the sum must keep at
+    // least a quarter of a toe's length (opposed toes cancel).
+    const vec3 forward{toe_dirs[0].x+toe_dirs[1].x,0.0F,toe_dirs[0].z+toe_dirs[1].z};
+    for (const auto & toe:toe_dirs)
+        if (toe.x*forward.x+toe.z*forward.z<=0.0F)
+            return gate("feet_point_forward","the toes point different ways");
+    if (length(forward)<.25F*.5F*(length(toe_dirs[0])+length(toe_dirs[1])))
+        return gate("feet_point_forward","the toes point different ways");
+    // Character's left = up x forward (+X when facing +Z, as VRM and glTF expect).
+    const vec3 left_axis{forward.z,0.0F,-forward.x};
+    const auto lateral=[&](std::size_t joint) {
+        const vec3 d=sub(at[joint],hips_position);
+        return (d.x*left_axis.x+d.z*left_axis.z)/std::max(length(left_axis),1.0e-12F);
+    };
+    if (lateral(arm_candidates[0].front())<lateral(arm_candidates[1].front())) std::swap(arm_candidates[0],arm_candidates[1]);
+    if (lateral(legs[0].front())<lateral(legs[1].front())) std::swap(legs[0],legs[1]);
+    if (lateral(arm_candidates[0].back())<=.15F*stature || lateral(arm_candidates[1].back())>=-.15F*stature)
+        return gate("hands_out_to_sides","a hand is not out to its own side");
 
     humanoid_mapping output;
     output.soma_to_generated.fill(-1);
@@ -500,18 +534,10 @@ result<humanoid_mapping> match_generated_humanoid(
         assign(26U+index,legs[1][index],right_leg_roles[index]);
     }
 
-    const vec3 root_position=generated.rest_positions[root];
-    const float stature=std::max(distance(root_position,generated.rest_positions[head.back()]),1.0e-6F);
-    float score=1.0F;
-    if (generated.rest_positions[head.back()].y<=root_position.y+.2F*stature) score-=.35F;
-    if (generated.rest_positions[legs[0].back()].y>=root_position.y-.15F*stature ||
-        generated.rest_positions[legs[1].back()].y>=root_position.y-.15F*stature) score-=.25F;
-    if (generated.rest_positions[arm_candidates[0].back()].x<=root_position.x+.15F*stature ||
-        generated.rest_positions[arm_candidates[1].back()].x>=root_position.x-.15F*stature) score-=.25F;
-    score=std::clamp(score,0.0F,1.0F);
-    output.report.core_score=score;
-    output.report.confidence=score;
-    output.report.alternative_margin=.5F*score;
+    // Every gate passed. The report keeps its old fields for API users: a match is all-or-nothing.
+    output.report.core_score=1.0F;
+    output.report.confidence=1.0F;
+    output.report.alternative_margin=0.0F;
     output.report.mapped_core_joints=22U;
     output.report.ignored_terminal_joints=
         subtree_size(subtree_size,arm_candidates[0].back())-1U+
@@ -519,11 +545,35 @@ result<humanoid_mapping> match_generated_humanoid(
     if (!options.allow_flexible_hands && output.report.ignored_terminal_joints!=30U)
         return std::unexpected(detail::fail(error_code::invalid_argument,
             "generated hand topology differs from the fixed 52-joint humanoid"));
-    if (score<options.minimum_confidence)
-        return std::unexpected(detail::fail(error_code::invalid_argument,
-            "generated humanoid confidence "+std::to_string(score)+
-            " is below the requested threshold "+std::to_string(options.minimum_confidence)));
     return output;
+}
+
+std::string humanoid_roles_json(const skeleton & generated) {
+    static constexpr std::array<const char *,23> names{"unmapped","hips","spine1","spine2","chest",
+        "neck","head","left_shoulder","left_upper_arm","left_forearm","left_hand",
+        "right_shoulder","right_upper_arm","right_forearm","right_hand","left_upper_leg",
+        "left_shin","left_foot","left_toe","right_upper_leg","right_shin","right_foot",
+        "right_toe"};
+    const auto quoted=[](std::string_view text) {
+        std::string out="\"";
+        for (const char c:text) {
+            if (c=='"' || c=='\\') { out+='\\'; out+=c; }
+            else if (static_cast<unsigned char>(c)<0x20U) out+=' ';
+            else out+=c;
+        }
+        return out+"\"";
+    };
+    const auto mapping=match_generated_humanoid(generated);
+    if (!mapping) return "{\"gates\":\"fail\",\"why\":"+quoted(mapping.error().message)+"}";
+    std::string out="{\"gates\":\"pass\",\"roles\":{";
+    bool first=true;
+    for (std::size_t joint=0;joint<generated.names.size() && joint<mapping->generated_roles.size();++joint) {
+        const auto role=static_cast<std::size_t>(mapping->generated_roles[joint]);
+        if (role==0U || role>=names.size()) continue;
+        out+=(first ? "" : ",")+quoted(names[role])+":"+quoted(generated.names[joint]);
+        first=false;
+    }
+    return out+"}}";
 }
 
 result<motion> retarget_soma30_motion_to_generated(
