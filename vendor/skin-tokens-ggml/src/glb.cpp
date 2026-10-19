@@ -1639,6 +1639,96 @@ void drop_unused_bytes(glb_builder & builder) {
     }
     builder.binary = std::move(packed);
 }
+
+// Calls visit on each node index an extension holds: "node" anywhere in an extension (VRM 1.0
+// humanoid, spring bones, VRM 0.x humanoid), "source" in VRMC_node_constraint and VRM 0.x
+// secondaryAnimation "bones". Other "source" keys name images (EXT_texture_webp), not nodes.
+void for_each_extension_node(json & value, std::string_view extension, const std::function<void(json &)> & visit) {
+    if (value.is_object()) {
+        for (auto & [key, child] : value.items()) {
+            if (key == "extensions" && child.is_object()) {
+                for (auto & [name, body] : child.items()) for_each_extension_node(body, name, visit);
+                continue;
+            }
+            if (!extension.empty() && child.is_number_unsigned() &&
+                (key == "node" || (key == "source" && extension == "VRMC_node_constraint"))) {
+                visit(child);
+                continue;
+            }
+            if (!extension.empty() && key == "bones" && extension == "VRM" && child.is_array()) {
+                for (auto & bone : child) if (bone.is_number_unsigned()) visit(bone);
+                continue;
+            }
+            for_each_extension_node(child, extension, visit);
+        }
+    } else if (value.is_array()) {
+        for (auto & child : value) for_each_extension_node(child, extension, visit);
+    }
+}
+
+// Removes each replaced node with nothing kept below it, and renumbers every node reference.
+// A replaced node stays when it holds a mesh, camera, skin or extension, when an extension names
+// it, or when a kept node is below it. Returns the new index of each old node (removed: npos).
+std::vector<std::size_t> drop_replaced_nodes(json & root, const std::vector<std::uint8_t> & replaced) {
+    json & nodes = root["nodes"];
+    const std::size_t count = nodes.size();
+    constexpr std::size_t gone = std::numeric_limits<std::size_t>::max();
+    std::vector<std::uint8_t> named(count, 0U);
+    for_each_extension_node(root, {}, [&](json & index) {
+        if (index.get<std::size_t>() < count) named[index.get<std::size_t>()] = 1U;
+    });
+    std::vector<std::uint8_t> keep(count, 2U);  // 2: not decided yet
+    std::function<bool(std::size_t)> kept = [&](std::size_t n) -> bool {
+        if (keep[n] != 2U) return keep[n] != 0U;
+        keep[n] = 1U;  // a cycle (invalid glTF) keeps its nodes
+        const json & node = nodes[n];
+        bool hold = n >= replaced.size() || replaced[n] == 0U || named[n] != 0U || node.contains("mesh") ||
+                    node.contains("camera") || node.contains("skin") || node.contains("extensions");
+        for (const auto & child : node.value("children", json::array()))
+            if (child.is_number_unsigned() && child.get<std::size_t>() < count && kept(child.get<std::size_t>())) hold = true;
+        keep[n] = hold ? 1U : 0U;
+        return hold;
+    };
+    std::vector<std::size_t> index_of(count, gone);
+    std::size_t next = 0;
+    for (std::size_t n = 0; n < count; ++n)
+        if (kept(n)) index_of[n] = next++;
+    if (next == count) return index_of;
+    const auto renumber = [&](json & list) {
+        json out = json::array();
+        for (const auto & value : list)
+            if (value.is_number_unsigned() && value.get<std::size_t>() < count && index_of[value.get<std::size_t>()] != gone)
+                out.push_back(index_of[value.get<std::size_t>()]);
+        list = std::move(out);
+    };
+    json out = json::array();
+    for (std::size_t n = 0; n < count; ++n) {
+        if (index_of[n] == gone) continue;
+        json node = std::move(nodes[n]);
+        if (node.contains("children")) {
+            renumber(node["children"]);
+            if (node["children"].empty()) node.erase("children");
+        }
+        out.push_back(std::move(node));
+    }
+    nodes = std::move(out);
+    for (auto & scene : root["scenes"]) if (scene.contains("nodes")) renumber(scene["nodes"]);
+    if (root.contains("skins"))
+        for (auto & skin_value : root["skins"]) {
+            if (skin_value.contains("joints")) renumber(skin_value["joints"]);
+            if (skin_value.contains("skeleton") && skin_value["skeleton"].is_number_unsigned())
+                skin_value["skeleton"] = index_of[skin_value["skeleton"].get<std::size_t>()];
+        }
+    if (root.contains("animations"))
+        for (auto & clip : root["animations"])
+            for (auto & channel : clip["channels"])
+                if (channel["target"].contains("node"))
+                    channel["target"]["node"] = index_of[channel["target"]["node"].get<std::size_t>()];
+    for_each_extension_node(root, {}, [&](json & index) {
+        if (index.get<std::size_t>() < count) index = index_of[index.get<std::size_t>()];
+    });
+    return index_of;
+}
 } // namespace
 
 result<std::vector<std::byte>> save_rigged_source_glb_memory(
@@ -1879,6 +1969,19 @@ result<std::vector<std::byte>> save_rigged_source_glb_memory(
     root["animations"] = json::array({{{"name", animation_name(animation)},
         {"samplers", std::move(samplers)}, {"channels", std::move(channels)}}});
 
+    // The new skin replaces the source's old skeleton. Its joints and the emptied mesh nodes would
+    // stay as unused nodes, and a tool that reads every node under a skeleton makes each one a bone.
+    std::vector<std::uint8_t> replaced(joint_base, 0U);
+    if (const auto old_skins = doc->root.find("skins"); old_skins != doc->root.end() && old_skins->is_array())
+        for (const auto & old_skin : *old_skins)
+            for (const auto & joint : old_skin.value("joints", json::array()))
+                if (joint.is_number_unsigned() && joint.get<std::size_t>() < joint_base)
+                    replaced[joint.get<std::size_t>()] = 1U;
+    for (std::size_t n = 0; n < joint_base; ++n)
+        if (node_done[n] != 0U && !root["nodes"][n].contains("mesh")) replaced[n] = 1U;
+    const auto index_of = drop_replaced_nodes(root, replaced);
+    const std::size_t new_joint_base = index_of[joint_base];
+    for (auto & index : placed) index = index_of[index];
     // Godot treats a scene with one root differently from one with several: when the source has a
     // single root, the skeleton and skinned meshes go inside it, so importers keep that root.
     // Only a root without a transform can hold them: the joints and vertices are in world space.
@@ -1893,7 +1996,7 @@ result<std::vector<std::byte>> save_rigged_source_glb_memory(
             holder = &single["children"];
         }
     }
-    holder->push_back(joint_base);
+    holder->push_back(new_joint_base);
     for (auto index : placed) holder->push_back(index);
     drop_unused_bytes(builder);
     align4(builder.binary);
