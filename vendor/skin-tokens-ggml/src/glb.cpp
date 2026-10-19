@@ -1155,10 +1155,21 @@ result<motion> load_kimodo_glb_file(const std::filesystem::path & path) {
     return load_skeleton_document(*doc, true);
 }
 
+namespace {
+result<skinned_asset> load_skinned_document(result<document> doc, result<mesh> geometry);
+}
+
 result<skinned_asset> load_skinned_glb_file(const std::filesystem::path & path) {
-    auto doc = read_document(path);
+    return load_skinned_document(read_document(path), load_glb_file(path));
+}
+
+result<skinned_asset> load_skinned_glb_memory(std::span<const std::byte> bytes) {
+    return load_skinned_document(parse_document(bytes), load_glb_memory(bytes));
+}
+
+namespace {
+result<skinned_asset> load_skinned_document(result<document> doc, result<mesh> geometry) {
     if (!doc) return std::unexpected(doc.error());
-    auto geometry = load_glb_file(path);
     if (!geometry) return std::unexpected(geometry.error());
     auto animation = load_skeleton_document(*doc, false);
     if (!animation) return std::unexpected(animation.error());
@@ -1300,6 +1311,7 @@ result<skinned_asset> load_skinned_glb_file(const std::filesystem::path & path) 
     }
     return output;
 }
+} // namespace
 
 result<glb_info> inspect_glb_file(const std::filesystem::path & path) {
     auto doc = read_document(path);

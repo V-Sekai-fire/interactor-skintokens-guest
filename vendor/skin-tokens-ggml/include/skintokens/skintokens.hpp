@@ -328,6 +328,8 @@ private:
 // previously generated SkinTokens asset.
 [[nodiscard]] SKINTOKENS_API result<skinned_asset> load_skinned_glb_file(
     const std::filesystem::path & path);
+[[nodiscard]] SKINTOKENS_API result<skinned_asset> load_skinned_glb_memory(
+    std::span<const std::byte> bytes);
 
 // Performs bounded structural inspection without loading model weights.
 [[nodiscard]] SKINTOKENS_API result<glb_info> inspect_glb_file(
@@ -457,5 +459,42 @@ compare_soma30_to_generated(
 [[nodiscard]] SKINTOKENS_API result<std::vector<std::byte>> add_animation_glb_memory(
     std::span<const std::byte> rigged,
     const motion & animation);
+
+// A SOMA30 clip in motion.elf's layout (interactor-motion-guest motion_result): per frame, per
+// joint, the parent-local row-major 3x3 (column vectors) then the translation; the root's
+// translation is its position, the others their rest offset. Rest = T-pose (identity rotations).
+[[nodiscard]] SKINTOKENS_API result<motion> soma30_motion_from_transforms(
+    const std::vector<std::string> & names,
+    const std::vector<std::int32_t> & parents,
+    float frames_per_second,
+    std::span<const float> transforms);
+
+// How a generated clip becomes a clip to ship. Kimodo starts and ends a clip at rest.
+//   loop: the window of about `seconds` (0.6x..1.4x; exactly `seconds` for a still clip) in the
+//         steady part whose last frame best meets its first (joint angles, root height and
+//         velocity), its last frames cross-faded into the frames before it, the root's ground
+//         travel removed, and frame 0 repeated at the end so a player wraps over one frame.
+//   once: the action, from just before the motion rises above 15% of its peak to just after it
+//         falls below, plus six settle frames each side.
+enum class clip_cut : std::uint8_t { loop, once };
+struct clip_cut_report {
+    std::size_t start = 0;
+    std::size_t frames = 0;           // without the repeated wrap frame
+    float seam_before_max_degrees = 0.0F;
+    float seam_after_max_degrees = 0.0F;
+    float largest_step_degrees = 0.0F; // the largest frame-to-frame joint turn inside the clip
+    float travel_removed_metres_per_second = 0.0F;
+};
+[[nodiscard]] SKINTOKENS_API result<std::pair<motion, clip_cut_report>> cut_clip(
+    const motion & generated, clip_cut kind, float seconds);
+
+// The whole viewer step: match the rigged file's skeleton to the humanoid, move the SOMA30 clip
+// onto it and add it to the file (first, RESET kept), named animation.name.
+[[nodiscard]] SKINTOKENS_API result<std::pair<std::vector<std::byte>, humanoid_match_report>>
+add_soma30_motion_glb_memory(
+    std::span<const std::byte> rigged,
+    const motion & soma30,
+    const humanoid_match_options & match_options = {},
+    const retarget_options & options = {});
 
 } // namespace skintokens

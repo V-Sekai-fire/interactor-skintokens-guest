@@ -11,6 +11,7 @@ add_stage_elf(skintokens
 	${_st}/src/glb.cpp
 	${_st}/src/mesh_encoder.cpp
 	${_st}/src/model.cpp
+	${_st}/src/motion_clip.cpp
 	${_st}/src/qwen.cpp
 	${_st}/src/retarget.cpp
 	${_st}/src/skin_vae.cpp
