@@ -10,8 +10,8 @@ defmodule CheckBintr do
     macos: {"v20260930-double.1", "godot.macos.editor.double.arm64", "5f6f2df33708d8f522e0cb5f40af58bd44c1eccb2dda7128081f4056b1de8dce"}
   }
   @addon %{
-    linux: {"v20261002-addon.1", "libgodot_riscv.linux.template_release.double.x86_64.so", "1cce3f2d207d4c7d625ed6ed6610fd7bba4a0c6301b242789ed2eecde5ce8f62"},
-    macos: {"v20261002-addon.1", "libgodot_riscv.macos.template_release.double.universal", "5aa0fe75cc80e98473a4a6dfa57ada3f3f6d61d76a2c3f01073f36d0e36358d0"}
+    linux: {"v20261019-addon.1", "libgodot_riscv.linux.template_release.double.x86_64.so", "8ab42de8462452e22bc091af0aedf2446934d8ee691adcd1bbccb9818642aed6"},
+    macos: {"v20261019-addon.1", "libgodot_riscv.macos.template_release.double.universal", "14f542887f322bbe9847fa0f24734a46d68458db366f139118b45fc8eb7479f0"}
   }
   @wall_s 600
   @expected [
