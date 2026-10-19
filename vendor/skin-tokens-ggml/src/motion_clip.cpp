@@ -15,7 +15,7 @@
 namespace skintokens {
 namespace {
 
-quat quat_from_rows(const float * m) {
+quat quat_from_rows(const float *m) {
     const float m00 = m[0], m01 = m[1], m02 = m[2], m10 = m[3], m11 = m[4], m12 = m[5], m20 = m[6],
                 m21 = m[7], m22 = m[8];
     const float tr = m00 + m11 + m22;
@@ -37,14 +37,14 @@ quat quat_from_rows(const float * m) {
     return {q.x / n, q.y / n, q.z / n, q.w / n};
 }
 
-float dot(const quat & a, const quat & b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
+float dot(const quat &a, const quat &b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
 
-float angle_degrees(const quat & a, const quat & b) {
+float angle_degrees(const quat &a, const quat &b) {
     const double d = std::min(1.0, std::abs(static_cast<double>(dot(a, b))));
     return static_cast<float>(2.0 * std::acos(d) * 180.0 / std::numbers::pi);
 }
 
-quat slerp(const quat & a, quat b, float t) {
+quat slerp(const quat &a, quat b, float t) {
     float d = dot(a, b);
     if (d < 0.0F) {
         b = {-b.x, -b.y, -b.z, -b.w};
@@ -71,8 +71,8 @@ float median(std::vector<float> v) {
 } // namespace
 
 result<motion> soma30_motion_from_transforms(
-    const std::vector<std::string> & names,
-    const std::vector<std::int32_t> & parents,
+    const std::vector<std::string> &names,
+    const std::vector<std::int32_t> &parents,
     float frames_per_second,
     std::span<const float> transforms) {
     const std::size_t joints = names.size();
@@ -93,17 +93,14 @@ result<motion> soma30_motion_from_transforms(
     // Rest = T-pose: identity rotations, so a joint's global rest is its parent's plus its offset.
     // The root rests where the first frame puts it (as soma_chain_glb.py writes the GLB).
     for (std::size_t j = 0; j < joints; ++j) {
-        const float * t = &transforms[j * 12U + 9U];
+        const float *t = &transforms[j * 12U + 9U];
         const vec3 offset{t[0], t[1], t[2]};
-        out.rig.rest_positions[j] = parents[j] < 0 ? offset
-            : vec3{out.rig.rest_positions[static_cast<std::size_t>(parents[j])].x + offset.x,
-                   out.rig.rest_positions[static_cast<std::size_t>(parents[j])].y + offset.y,
-                   out.rig.rest_positions[static_cast<std::size_t>(parents[j])].z + offset.z};
+        out.rig.rest_positions[j] = parents[j] < 0 ? offset : vec3{out.rig.rest_positions[static_cast<std::size_t>(parents[j])].x + offset.x, out.rig.rest_positions[static_cast<std::size_t>(parents[j])].y + offset.y, out.rig.rest_positions[static_cast<std::size_t>(parents[j])].z + offset.z};
     }
     out.root_translations.resize(out.frames);
     out.local_rotations.resize(out.frames * joints);
     for (std::size_t f = 0; f < out.frames; ++f) {
-        const float * root = &transforms[f * joints * 12U];
+        const float *root = &transforms[f * joints * 12U];
         out.root_translations[f] = {root[9], root[10], root[11]};
         for (std::size_t j = 0; j < joints; ++j)
             out.local_rotations[f * joints + j] = quat_from_rows(&transforms[(f * joints + j) * 12U]);
@@ -111,13 +108,13 @@ result<motion> soma30_motion_from_transforms(
     return out;
 }
 
-result<std::pair<motion, clip_cut_report>> cut_clip(const motion & in, clip_cut kind, float seconds) {
+result<std::pair<motion, clip_cut_report>> cut_clip(const motion &in, clip_cut kind, float seconds) {
     const std::size_t J = in.rig.names.size(), F = in.frames;
     if (J == 0U || F < 16U || in.local_rotations.size() != F * J || in.root_translations.size() != F)
         return std::unexpected(detail::fail(error_code::invalid_argument, "clip is too short to cut"));
     const float fps = in.frames_per_second;
     const auto Q = [&](std::size_t f, std::size_t j) -> const quat & { return in.local_rotations[f * J + j]; };
-    const auto & R = in.root_translations;
+    const auto &R = in.root_translations;
     std::vector<float> energy(F - 1U), speed(F - 1U);
     for (std::size_t f = 0; f + 1U < F; ++f) {
         float e = 0.0F;
@@ -125,7 +122,7 @@ result<std::pair<motion, clip_cut_report>> cut_clip(const motion & in, clip_cut 
         energy[f] = e;
         speed[f] = std::hypot(R[f + 1U].x - R[f].x, R[f + 1U].z - R[f].z) * fps;
     }
-    const auto seam = [&](std::size_t a, std::size_t b, float & max_deg) {
+    const auto seam = [&](std::size_t a, std::size_t b, float &max_deg) {
         float sum = 0.0F;
         max_deg = 0.0F;
         for (std::size_t j = 0; j < J; ++j) {
@@ -227,7 +224,7 @@ result<std::pair<motion, clip_cut_report>> cut_clip(const motion & in, clip_cut 
     } else {
         // Keep the one-shot on the spot where it starts.
         const float x0 = out.root_translations[0].x, z0 = out.root_translations[0].z;
-        for (auto & p : out.root_translations) p.x -= x0, p.z -= z0;
+        for (auto &p : out.root_translations) p.x -= x0, p.z -= z0;
     }
     for (std::size_t i = 0; i + 1U < L; ++i)
         for (std::size_t j = 0; j < J; ++j)
@@ -239,9 +236,9 @@ result<std::pair<motion, clip_cut_report>> cut_clip(const motion & in, clip_cut 
 
 result<std::pair<std::vector<std::byte>, humanoid_match_report>> add_soma30_motion_glb_memory(
     std::span<const std::byte> rigged,
-    const motion & soma30,
-    const humanoid_match_options & match_options,
-    const retarget_options & options) {
+    const motion &soma30,
+    const humanoid_match_options &match_options,
+    const retarget_options &options) {
     if (identify_rig(soma30.rig) != rig_kind::soma30)
         return std::unexpected(detail::fail(error_code::invalid_argument, "motion is not a SOMA30 clip"));
     auto asset = load_skinned_glb_memory(rigged);

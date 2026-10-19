@@ -37,13 +37,13 @@ std::vector<vec3> to_model_space(std::span<const vec3> values) {
     return output;
 }
 
-skeleton to_model_space(const skeleton & source) {
+skeleton to_model_space(const skeleton &source) {
     skeleton output = source;
     output.rest_positions = to_model_space(source.rest_positions);
     return output;
 }
 
-skeleton from_model_space(const skeleton & source) {
+skeleton from_model_space(const skeleton &source) {
     skeleton output = source;
     output.rest_positions.reserve(source.rest_positions.size());
     output.rest_positions.clear();
@@ -53,20 +53,20 @@ skeleton from_model_space(const skeleton & source) {
 
 quat multiply(quat a, quat b) {
     return {
-        a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
-        a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
-        a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
-        a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z,
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
     };
 }
 
 quat conjugate(quat value) { return {-value.x, -value.y, -value.z, value.w}; }
 
 quat normalized(quat value) {
-    const float length = std::sqrt(value.x*value.x + value.y*value.y +
-                                   value.z*value.z + value.w*value.w);
+    const float length = std::sqrt(value.x * value.x + value.y * value.y +
+        value.z * value.z + value.w * value.w);
     if (length <= 1e-12F) return {};
-    return {value.x/length, value.y/length, value.z/length, value.w/length};
+    return {value.x / length, value.y / length, value.z / length, value.w / length};
 }
 
 vec3 add(vec3 left, vec3 right) {
@@ -87,8 +87,8 @@ float dot(vec3 left, vec3 right) {
 
 vec3 cross(vec3 left, vec3 right) {
     return {left.y * right.z - left.z * right.y,
-            left.z * right.x - left.x * right.z,
-            left.x * right.y - left.y * right.x};
+        left.z * right.x - left.x * right.z,
+        left.x * right.y - left.y * right.x};
 }
 
 float length(vec3 value) { return std::sqrt(dot(value, value)); }
@@ -97,7 +97,8 @@ float point_segment_distance_squared(vec3 point, vec3 start, vec3 end) {
     const auto edge = sub(end, start);
     const float denominator = dot(edge, edge);
     const float amount = denominator > 1.0e-12F ?
-        std::clamp(dot(sub(point, start), edge) / denominator, 0.0F, 1.0F) : 0.0F;
+        std::clamp(dot(sub(point, start), edge) / denominator, 0.0F, 1.0F) :
+        0.0F;
     const auto delta = sub(point, add(start, scale(edge, amount)));
     return dot(delta, delta);
 }
@@ -110,7 +111,7 @@ float point_triangle_distance_squared(vec3 point, vec3 a, vec3 b, vec3 c) {
     const auto bp = sub(point, b);
     const float d3 = dot(ab, bp), d4 = dot(ac, bp);
     if (d3 >= 0.0F && d4 <= d3) return dot(bp, bp);
-    const float vc = d1*d4 - d3*d2;
+    const float vc = d1 * d4 - d3 * d2;
     if (vc <= 0.0F && d1 >= 0.0F && d3 <= 0.0F) {
         const auto delta = sub(point, add(a, scale(ab, d1 / (d1 - d3))));
         return dot(delta, delta);
@@ -118,12 +119,12 @@ float point_triangle_distance_squared(vec3 point, vec3 a, vec3 b, vec3 c) {
     const auto cp = sub(point, c);
     const float d5 = dot(ab, cp), d6 = dot(ac, cp);
     if (d6 >= 0.0F && d5 <= d6) return dot(cp, cp);
-    const float vb = d5*d2 - d1*d6;
+    const float vb = d5 * d2 - d1 * d6;
     if (vb <= 0.0F && d2 >= 0.0F && d6 <= 0.0F) {
         const auto delta = sub(point, add(a, scale(ac, d2 / (d2 - d6))));
         return dot(delta, delta);
     }
-    const float va = d3*d6 - d5*d4;
+    const float va = d3 * d6 - d5 * d4;
     if (va <= 0.0F && d4 - d3 >= 0.0F && d5 - d6 >= 0.0F) {
         const auto edge = sub(c, b);
         const auto delta = sub(point, add(b, scale(edge, (d4 - d3) / ((d4 - d3) + (d5 - d6)))));
@@ -132,10 +133,10 @@ float point_triangle_distance_squared(vec3 point, vec3 a, vec3 b, vec3 c) {
     const float denominator = va + vb + vc;
     if (std::abs(denominator) <= 1.0e-12F)
         return std::min({point_segment_distance_squared(point, a, b),
-                         point_segment_distance_squared(point, b, c),
-                         point_segment_distance_squared(point, c, a)});
+            point_segment_distance_squared(point, b, c),
+            point_segment_distance_squared(point, c, a)});
     const float inverse = 1.0F / denominator;
-    const auto closest = add(a, add(scale(ab, vb*inverse), scale(ac, vc*inverse)));
+    const auto closest = add(a, add(scale(ab, vb * inverse), scale(ac, vc * inverse)));
     const auto delta = sub(point, closest);
     return dot(delta, delta);
 }
@@ -150,7 +151,7 @@ vec3 rotate(quat rotation, vec3 value) {
     const vec3 axis{rotation.x, rotation.y, rotation.z};
     return add(add(scale(axis, 2.0F * dot(axis, value)),
                    scale(value, rotation.w * rotation.w - dot(axis, axis))),
-               scale(cross(axis, value), 2.0F * rotation.w));
+        scale(cross(axis, value), 2.0F * rotation.w));
 }
 
 quat rotation_between(vec3 from, vec3 to) {
@@ -185,17 +186,16 @@ constexpr std::array<arm_chain, 4> arm_chains{{
     {"RightArm", "RightForeArm", "RightHand", -1.0F},
 }};
 
-std::optional<std::size_t> find_joint(const skeleton & rig, std::string_view name) {
+std::optional<std::size_t> find_joint(const skeleton &rig, std::string_view name) {
     const auto found = std::find(rig.names.begin(), rig.names.end(), name);
     return found == rig.names.end() ? std::nullopt :
-        std::optional<std::size_t>{static_cast<std::size_t>(found - rig.names.begin())};
+                                      std::optional<std::size_t>{static_cast<std::size_t>(found - rig.names.begin())};
 }
 
-float surface_distance(const mesh & geometry, vec3 point) {
+float surface_distance(const mesh &geometry, vec3 point) {
     float squared = std::numeric_limits<float>::max();
-    for (const auto & face : geometry.faces)
-        squared = std::min(squared, point_triangle_distance_squared(
-            point, geometry.vertices[face[0]], geometry.vertices[face[1]], geometry.vertices[face[2]]));
+    for (const auto &face : geometry.faces)
+        squared = std::min(squared, point_triangle_distance_squared(point, geometry.vertices[face[0]], geometry.vertices[face[1]], geometry.vertices[face[2]]));
     return std::sqrt(squared);
 }
 
@@ -203,23 +203,21 @@ float surface_distance(const mesh & geometry, vec3 point) {
 // segment rather than only at the joints. A straight chord between two joints
 // that both sit near the surface can still leave the volume in between, which
 // is exactly what a lowered chain beside a horizontal arm looks like.
-float chain_clearance(const mesh & geometry, std::span<const vec3> chain) {
+float chain_clearance(const mesh &geometry, std::span<const vec3> chain) {
     constexpr unsigned steps = 4U;
     float worst = 0.0F;
     for (std::size_t index = 0; index + 1U < chain.size(); ++index)
         for (unsigned step = index == 0U ? 0U : 1U; step <= steps; ++step)
-            worst = std::max(worst, surface_distance(geometry,
-                add(chain[index], scale(sub(chain[index + 1U], chain[index]),
-                    static_cast<float>(step) / static_cast<float>(steps)))));
+            worst = std::max(worst, surface_distance(geometry, add(chain[index], scale(sub(chain[index + 1U], chain[index]), static_cast<float>(step) / static_cast<float>(steps)))));
     return worst;
 }
 
 // Worst clearance across every recognized arm chain, or nullopt when the rig
 // exposes none: a non-humanoid skeleton must not be scored on arms it lacks.
-std::optional<float> arm_clearance(const mesh & geometry, const skeleton & rig,
-                                   const std::vector<vec3> & positions) {
+std::optional<float> arm_clearance(const mesh &geometry, const skeleton &rig,
+    const std::vector<vec3> &positions) {
     std::optional<float> worst;
-    for (const auto & chain : arm_chains) {
+    for (const auto &chain : arm_chains) {
         const auto shoulder = find_joint(rig, chain.shoulder);
         const auto elbow = find_joint(rig, chain.elbow);
         const auto wrist = find_joint(rig, chain.wrist);
@@ -238,7 +236,7 @@ std::optional<float> arm_clearance(const mesh & geometry, const skeleton & rig,
 // in the rest positions. Together they are exact: the clip replays unchanged,
 // and frame zero now equals the bind pose, so the first exported frame leaves
 // the mesh undeformed. Every bone length is a length of the source skeleton.
-motion pose_at_frame_zero(const motion & animation) {
+motion pose_at_frame_zero(const motion &animation) {
     const std::size_t joint_count = animation.rig.names.size();
     motion output = animation;
     std::vector<quat> bind_global(joint_count), frame_global(joint_count), delta_global(joint_count);
@@ -253,45 +251,45 @@ motion pose_at_frame_zero(const motion & animation) {
         const auto index = static_cast<std::size_t>(parent);
         bind_global[joint_index] = normalized(multiply(bind_global[index], local));
         output.rig.rest_positions[joint_index] = add(output.rig.rest_positions[index],
-            rotate(bind_global[index], sub(animation.rig.rest_positions[joint_index],
-                                           animation.rig.rest_positions[index])));
+            rotate(bind_global[index], sub(animation.rig.rest_positions[joint_index], animation.rig.rest_positions[index])));
     }
     for (std::size_t frame = 0; frame < animation.frames; ++frame) {
         for (std::size_t joint_index = 0; joint_index < joint_count; ++joint_index) {
             const auto parent = animation.rig.parents[joint_index];
-            const quat local = animation.local_rotations[frame*joint_count+joint_index];
+            const quat local = animation.local_rotations[frame * joint_count + joint_index];
             frame_global[joint_index] = normalized(parent < 0 ? local :
-                multiply(frame_global[static_cast<std::size_t>(parent)], local));
+                                                                multiply(frame_global[static_cast<std::size_t>(parent)], local));
             delta_global[joint_index] = normalized(multiply(frame_global[joint_index],
-                                                            conjugate(bind_global[joint_index])));
+                conjugate(bind_global[joint_index])));
         }
         for (std::size_t joint_index = 0; joint_index < joint_count; ++joint_index) {
             const auto parent = animation.rig.parents[joint_index];
-            output.local_rotations[frame*joint_count+joint_index] = normalized(parent < 0 ?
-                delta_global[joint_index] : multiply(conjugate(delta_global[static_cast<std::size_t>(parent)]),
-                                                     delta_global[joint_index]));
+            output.local_rotations[frame * joint_count + joint_index] = normalized(parent < 0 ?
+                    delta_global[joint_index] :
+                    multiply(conjugate(delta_global[static_cast<std::size_t>(parent)]),
+                        delta_global[joint_index]));
         }
     }
     return output;
 }
 
-result<void> validate_mesh(const mesh & source) {
+result<void> validate_mesh(const mesh &source) {
     if (source.vertices.empty() || source.faces.empty())
         return std::unexpected(detail::fail(error_code::invalid_argument, "mesh must contain vertices and triangles"));
     if (!source.normals.empty() && source.normals.size() != source.vertices.size())
         return std::unexpected(detail::fail(error_code::invalid_argument, "mesh normals must match vertex count"));
-    for (const auto & value : source.vertices) {
+    for (const auto &value : source.vertices) {
         if (!std::isfinite(value.x) || !std::isfinite(value.y) || !std::isfinite(value.z))
             return std::unexpected(detail::fail(error_code::invalid_argument, "mesh contains non-finite positions"));
     }
-    for (const auto & face : source.faces) {
+    for (const auto &face : source.faces) {
         if (face[0] >= source.vertices.size() || face[1] >= source.vertices.size() || face[2] >= source.vertices.size())
             return std::unexpected(detail::fail(error_code::invalid_argument, "mesh triangle index is out of range"));
     }
     return {};
 }
 
-result<void> validate_skeleton(const skeleton & target) {
+result<void> validate_skeleton(const skeleton &target) {
     const std::size_t count = target.names.size();
     if (count == 0 || count > 256U || target.parents.size() != count || target.rest_positions.size() != count)
         return std::unexpected(detail::fail(error_code::invalid_argument, "skeleton arrays must contain 1..256 matching joints"));
@@ -306,10 +304,10 @@ result<void> validate_skeleton(const skeleton & target) {
     return {};
 }
 
-std::vector<vec3> vertex_normals(const mesh & source) {
+std::vector<vec3> vertex_normals(const mesh &source) {
     if (source.normals.size() == source.vertices.size()) return source.normals;
     std::vector<vec3> result(source.vertices.size());
-    for (const auto & face : source.faces) {
+    for (const auto &face : source.faces) {
         const auto a = source.vertices[face[0]];
         const auto b = source.vertices[face[1]];
         const auto c = source.vertices[face[2]];
@@ -317,13 +315,18 @@ std::vector<vec3> vertex_normals(const mesh & source) {
         const float vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
         const vec3 n{uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx};
         for (const auto index : face) {
-            result[index].x += n.x; result[index].y += n.y; result[index].z += n.z;
+            result[index].x += n.x;
+            result[index].y += n.y;
+            result[index].z += n.z;
         }
     }
-    for (auto & value : result) {
+    for (auto &value : result) {
         const float length = std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z);
-        if (length > 1e-12F) { value.x /= length; value.y /= length; value.z /= length; }
-        else value = {0.0F, 1.0F, 0.0F};
+        if (length > 1e-12F) {
+            value.x /= length;
+            value.y /= length;
+            value.z /= length;
+        } else value = {0.0F, 1.0F, 0.0F};
     }
     return result;
 }
@@ -379,10 +382,14 @@ public:
 private:
     std::size_t interval(std::size_t maximum) {
         std::uint32_t mask = static_cast<std::uint32_t>(maximum);
-        mask |= mask >> 1U; mask |= mask >> 2U; mask |= mask >> 4U;
-        mask |= mask >> 8U; mask |= mask >> 16U;
+        mask |= mask >> 1U;
+        mask |= mask >> 2U;
+        mask |= mask >> 4U;
+        mask |= mask >> 8U;
+        mask |= mask >> 16U;
         std::uint32_t value;
-        do value = static_cast<std::uint32_t>(engine_()) & mask; while (value > maximum);
+        do value = static_cast<std::uint32_t>(engine_()) & mask;
+        while (value > maximum);
         return value;
     }
 
@@ -440,7 +447,10 @@ private:
     }
 
     std::uint32_t next32() {
-        if (has_uint32_) { has_uint32_ = false; return buffered_uint32_; }
+        if (has_uint32_) {
+            has_uint32_ = false;
+            return buffered_uint32_;
+        }
         const auto value = next64();
         buffered_uint32_ = static_cast<std::uint32_t>(value >> 32U);
         has_uint32_ = true;
@@ -469,7 +479,7 @@ private:
 
 result<std::optional<std::vector<std::int32_t>>> forced_skin_codes(
     std::size_t joint_count) {
-    const char * path = std::getenv("SKINTOKENS_FORCED_CODES");
+    const char *path = std::getenv("SKINTOKENS_FORCED_CODES");
     if (path == nullptr || *path == '\0') return std::optional<std::vector<std::int32_t>>{};
     const std::size_t expected = joint_count * 4U;
     std::ifstream input(path, std::ios::binary | std::ios::ate);
@@ -493,9 +503,9 @@ result<std::optional<std::vector<std::int32_t>>> forced_skin_codes(
     return std::optional<std::vector<std::int32_t>>{std::move(codes)};
 }
 
-result<sampled_cloud> sample_mesh_surface(const mesh & source, std::span<const vec3> normalized,
-                                          std::span<const vec3> vertex_normal, std::uint64_t seed,
-                                          std::span<const std::array<double, 3>> precise = {}) {
+result<sampled_cloud> sample_mesh_surface(const mesh &source, std::span<const vec3> normalized,
+    std::span<const vec3> vertex_normal, std::uint64_t seed,
+    std::span<const std::array<double, 3>> precise = {}) {
     constexpr std::size_t total_samples = 54000U;
     // The released predict config declares 16,384 vertex samples, but
     // SamplerMix.sample() does not forward that member to
@@ -509,7 +519,8 @@ result<sampled_cloud> sample_mesh_surface(const mesh & source, std::span<const v
     const auto coordinate = [&](std::size_t vertex, std::size_t axis) {
         if (!precise.empty()) return precise[vertex][axis];
         const auto value = normalized[vertex];
-        return static_cast<double>(axis == 0U ? value.x : axis == 1U ? value.y : value.z);
+        return static_cast<double>(axis == 0U ? value.x : axis == 1U ? value.y :
+                                                                       value.z);
     };
     const auto blender_face = [](triangle face) {
         // BpyParser rebuilds each triangle from polygon.edge_keys, then picks
@@ -529,12 +540,13 @@ result<sampled_cloud> sample_mesh_surface(const mesh & source, std::span<const v
             }
             table[slot] = key;
         }
-        const auto first = **std::find_if(table.begin(), table.end(), [](const auto & value) { return value.has_value(); });
+        const auto first = **std::find_if(table.begin(), table.end(), [](const auto &value) { return value.has_value(); });
         while (face[0] != first) std::rotate(face.begin(), face.begin() + 1, face.end());
         return face;
     };
     sampled_cloud output;
-    output.points.reserve(total_samples); output.normals.reserve(total_samples);
+    output.points.reserve(total_samples);
+    output.normals.reserve(total_samples);
     if (seed > std::numeric_limits<std::uint32_t>::max())
         return std::unexpected(detail::fail(error_code::invalid_argument,
             "sampling seed exceeds NumPy RandomState's supported range"));
@@ -559,20 +571,21 @@ result<sampled_cloud> sample_mesh_surface(const mesh & source, std::span<const v
             coordinate(face[2], 1U) - coordinate(face[0], 1U),
             coordinate(face[2], 2U) - coordinate(face[0], 2U)};
         const std::array<double, 3> value{
-            left[1]*right[2] - left[2]*right[1],
-            left[2]*right[0] - left[0]*right[2],
-            left[0]*right[1] - left[1]*right[0]};
-        const double length = std::sqrt(value[0]*value[0] + value[1]*value[1] + value[2]*value[2]);
+            left[1] * right[2] - left[2] * right[1],
+            left[2] * right[0] - left[0] * right[2],
+            left[0] * right[1] - left[1] * right[0]};
+        const double length = std::sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2]);
         areas[i] = length;
         face_normals[i] = length > 1e-12 ? vec3{
-            static_cast<float>(value[0]/length), static_cast<float>(value[1]/length),
-            static_cast<float>(value[2]/length)} : vec3{0.0F, 1.0F, 0.0F};
+                                               static_cast<float>(value[0] / length), static_cast<float>(value[1] / length),
+                                               static_cast<float>(value[2] / length)} :
+                                           vec3{0.0F, 1.0F, 0.0F};
     }
     std::partial_sum(areas.begin(), areas.end(), areas.begin());
     if (areas.back() <= 0.0)
         return std::unexpected(detail::fail(error_code::invalid_argument, "mesh has no non-degenerate surface"));
     std::vector<std::size_t> face_indices(total_samples);
-    for (auto & face_index : face_indices) {
+    for (auto &face_index : face_indices) {
         const double pick = random.random_double() * areas.back();
         face_index = static_cast<std::size_t>(std::lower_bound(areas.begin(), areas.end(), pick) - areas.begin());
     }
@@ -581,16 +594,19 @@ result<sampled_cloud> sample_mesh_surface(const mesh & source, std::span<const v
     for (const auto face_index : face_indices) {
         const auto face = blender_face(source.faces[face_index]);
         double u = random.random_double(), v = random.random_double();
-        if (u + v > 1.0) { u = 1.0 - u; v = 1.0 - v; }
+        if (u + v > 1.0) {
+            u = 1.0 - u;
+            v = 1.0 - v;
+        }
         output.faces.push_back(static_cast<std::uint32_t>(face_index));
         output.barycentric.push_back({u, v});
         vec3 point{};
-        float * output_axes[]{&point.x, &point.y, &point.z};
+        float *output_axes[]{&point.x, &point.y, &point.z};
         for (std::size_t axis = 0; axis < 3U; ++axis) {
             const double a = coordinate(face[0], axis);
             const double b = coordinate(face[1], axis);
             const double c = coordinate(face[2], axis);
-            *output_axes[axis] = static_cast<float>(a + (b-a)*u + (c-a)*v);
+            *output_axes[axis] = static_cast<float>(a + (b - a) * u + (c - a) * v);
         }
         output.points.push_back(point);
         output.normals.push_back(face_normals[face_index]);
@@ -599,19 +615,21 @@ result<sampled_cloud> sample_mesh_surface(const mesh & source, std::span<const v
 }
 
 std::vector<std::int32_t> sampled_farthest_points(std::span<const vec3> points,
-                                                   std::size_t candidates, std::size_t wanted,
-                                                   std::uint64_t seed) {
+    std::size_t candidates, std::size_t wanted,
+    std::uint64_t seed) {
     numpy_pcg64 random{seed};
     auto order = random.choice(points.size(), std::min(candidates, points.size()));
-    std::vector<vec3> subset; subset.reserve(order.size());
+    std::vector<vec3> subset;
+    subset.reserve(order.size());
     for (const auto index : order) subset.push_back(points[index]);
     const auto local = farthest_points(subset, wanted);
-    std::vector<std::int32_t> output; output.reserve(local.size());
+    std::vector<std::int32_t> output;
+    output.reserve(local.size());
     for (const auto index : local) output.push_back(static_cast<std::int32_t>(order[static_cast<std::size_t>(index)]));
     return output;
 }
 
-skin geometric_binding(const mesh & source, const skeleton & target) {
+skin geometric_binding(const mesh &source, const skeleton &target) {
     skin output;
     output.rig = target;
     output.joints.resize(source.vertices.size());
@@ -623,7 +641,9 @@ skin geometric_binding(const mesh & source, const skeleton & target) {
         const float dx = end.x - start.x, dy = end.y - start.y, dz = end.z - start.z;
         const float length2 = dx * dx + dy * dy + dz * dz;
         float t = length2 > 1e-12F ? ((point.x - start.x) * dx + (point.y - start.y) * dy +
-            (point.z - start.z) * dz) / length2 : 0.0F;
+                                         (point.z - start.z) * dz) /
+                length2 :
+                                     0.0F;
         t = std::clamp(t, 0.0F, 1.0F);
         const float ex = point.x - (start.x + t * dx);
         const float ey = point.y - (start.y + t * dy);
@@ -632,10 +652,10 @@ skin geometric_binding(const mesh & source, const skeleton & target) {
     };
     for (std::size_t vertex = 0; vertex < source.vertices.size(); ++vertex) {
         std::array<std::pair<float, std::uint16_t>, 4> closest{};
-        for (auto & entry : closest) entry = {std::numeric_limits<float>::infinity(), 0U};
+        for (auto &entry : closest) entry = {std::numeric_limits<float>::infinity(), 0U};
         for (std::size_t joint = 0; joint < target.names.size(); ++joint) {
             const auto candidate = std::pair{squared_distance_to_bone(source.vertices[vertex], joint),
-                                              static_cast<std::uint16_t>(joint)};
+                static_cast<std::uint16_t>(joint)};
             if (candidate.first >= closest.back().first) continue;
             closest.back() = candidate;
             std::sort(closest.begin(), closest.end());
@@ -646,23 +666,23 @@ skin geometric_binding(const mesh & source, const skeleton & target) {
             output.weights[vertex][slot] = 1.0F / std::max(closest[slot].first, 1e-5F);
             sum += output.weights[vertex][slot];
         }
-        for (auto & value : output.weights[vertex]) value /= sum;
+        for (auto &value : output.weights[vertex]) value /= sum;
     }
     output.learned = false;
     return output;
 }
 
 void dump_binding_trace_if_requested(
-    const std::vector<std::vector<float>> & dense, const skin & output,
+    const std::vector<std::vector<float>> &dense, const skin &output,
     std::span<const vec3> normalized_vertices,
     std::span<const std::uint32_t> neighbor_indices,
     std::span<const float> interpolation_weights,
     std::span<const float> surface_weights,
     std::span<const float> final_dense_weights) {
-    const char * prefix = std::getenv("SKINTOKENS_DUMP_BINDING_TRACE_PREFIX");
+    const char *prefix = std::getenv("SKINTOKENS_DUMP_BINDING_TRACE_PREFIX");
     if (prefix == nullptr || *prefix == '\0') return;
     const std::filesystem::path base{prefix};
-    const auto write = [](const std::filesystem::path & path, const void * data, std::size_t bytes) {
+    const auto write = [](const std::filesystem::path &path, const void *data, std::size_t bytes) {
         std::ofstream stream(path, std::ios::binary | std::ios::trunc);
         if (!stream) throw std::runtime_error("cannot create requested binding diagnostic dump");
         stream.write(static_cast<const char *>(data), static_cast<std::streamsize>(bytes));
@@ -670,9 +690,9 @@ void dump_binding_trace_if_requested(
     };
     std::ofstream dense_stream(base.string() + ".dense.f32", std::ios::binary | std::ios::trunc);
     if (!dense_stream) throw std::runtime_error("cannot create requested dense binding dump");
-    for (const auto & joint : dense)
+    for (const auto &joint : dense)
         dense_stream.write(reinterpret_cast<const char *>(joint.data()),
-                           static_cast<std::streamsize>(joint.size() * sizeof(float)));
+            static_cast<std::streamsize>(joint.size() * sizeof(float)));
     if (!dense_stream) throw std::runtime_error("cannot write requested dense binding dump");
     write(base.string() + ".joints.u16", output.joints.data(), output.joints.size() * sizeof(output.joints.front()));
     write(base.string() + ".weights.f32", output.weights.data(), output.weights.size() * sizeof(output.weights.front()));
@@ -686,21 +706,21 @@ void dump_binding_trace_if_requested(
 }
 
 template<class T>
-void dump_binary(const std::filesystem::path & path, std::span<const T> values);
+void dump_binary(const std::filesystem::path &path, std::span<const T> values);
 
-result<skin> decode_binding(const detail::weight_component & weights, ggml_backend_t backend,
-                            const skeleton & target,
-                            std::span<const std::int32_t> codes,
-                            std::span<const float> vae_condition,
-                            std::span<const vec3> sampled_points,
-                            std::span<const vec3> sampled_normals,
-                            std::span<const vec3> normalized_vertices,
-                            std::span<const triangle> faces,
-                            std::span<const vec3> normalized_joints,
-                            bool surface_postprocess,
-                            std::span<const vec3> vertex_normals,
-                            std::span<const std::uint32_t> sampled_faces,
-                            bool robust_transfer) {
+result<skin> decode_binding(const detail::weight_component &weights, ggml_backend_t backend,
+    const skeleton &target,
+    std::span<const std::int32_t> codes,
+    std::span<const float> vae_condition,
+    std::span<const vec3> sampled_points,
+    std::span<const vec3> sampled_normals,
+    std::span<const vec3> normalized_vertices,
+    std::span<const triangle> faces,
+    std::span<const vec3> normalized_joints,
+    bool surface_postprocess,
+    std::span<const vec3> vertex_normals,
+    std::span<const std::uint32_t> sampled_faces,
+    bool robust_transfer) {
     detail::profile_scope total_profile{"binding.decode.total"};
     if (codes.size() != target.names.size() * 4U)
         return std::unexpected(detail::fail(error_code::compute, "skin-code count does not match generated skeleton"));
@@ -719,14 +739,14 @@ result<skin> decode_binding(const detail::weight_component & weights, ggml_backe
     // upstream export retains those raw learned weights; voxel_skin is an
     // explicit optional heuristic before top-four selection.
     const bool trace_binding = [] {
-        const char * value = std::getenv("SKINTOKENS_DUMP_BINDING_TRACE_PREFIX");
+        const char *value = std::getenv("SKINTOKENS_DUMP_BINDING_TRACE_PREFIX");
         return value != nullptr && *value != '\0';
     }();
     detail::binding_trace trace;
     const detail::transfer_inputs inputs{normalized_vertices, vertex_normals, faces, sampled_points,
-                                         sampled_normals, sampled_faces, dense};
-    if (const auto & capture = detail::transfer_capture()) capture(inputs);
-    if (const char * path = std::getenv("SKINTOKENS_DUMP_TRANSFER"); path != nullptr && *path != '\0') {
+        sampled_normals, sampled_faces, dense};
+    if (const auto &capture = detail::transfer_capture()) capture(inputs);
+    if (const char *path = std::getenv("SKINTOKENS_DUMP_TRANSFER"); path != nullptr && *path != '\0') {
         const auto bytes = detail::serialize_transfer_inputs(inputs);
         dump_binary(path, std::span<const std::byte>{bytes});
     }
@@ -744,34 +764,34 @@ result<skin> decode_binding(const detail::weight_component & weights, ggml_backe
                 sampled_points, dense, trace_binding ? &trace : nullptr);
     });
     dump_binding_trace_if_requested(dense, output, normalized_vertices,
-                                    trace.neighbor_indices, trace.interpolation_weights,
-                                    trace.surface_weights, trace.final_dense_weights);
+        trace.neighbor_indices, trace.interpolation_weights,
+        trace.surface_weights, trace.final_dense_weights);
     return output;
 }
 
 void dump_mesh_condition_if_requested(std::span<const float> values) {
-    const char * path = std::getenv("SKINTOKENS_DUMP_MESH_CONDITION");
+    const char *path = std::getenv("SKINTOKENS_DUMP_MESH_CONDITION");
     if (path == nullptr || *path == '\0') return;
     std::ofstream stream(path, std::ios::binary | std::ios::trunc);
     if (!stream) throw std::runtime_error("cannot create requested mesh-condition dump");
     stream.write(reinterpret_cast<const char *>(values.data()),
-                 static_cast<std::streamsize>(values.size_bytes()));
+        static_cast<std::streamsize>(values.size_bytes()));
     if (!stream) throw std::runtime_error("cannot write requested mesh-condition dump");
 }
 
 template<class T>
-void dump_binary(const std::filesystem::path & path, std::span<const T> values) {
+void dump_binary(const std::filesystem::path &path, std::span<const T> values) {
     std::ofstream stream(path, std::ios::binary | std::ios::trunc);
     if (!stream) throw std::runtime_error("cannot create requested diagnostic dump");
     stream.write(reinterpret_cast<const char *>(values.data()),
-                 static_cast<std::streamsize>(values.size_bytes()));
+        static_cast<std::streamsize>(values.size_bytes()));
     if (!stream) throw std::runtime_error("cannot write requested diagnostic dump");
 }
 
-void dump_mesh_input_if_requested(const sampled_cloud & sampled,
-                                  std::span<const triangle> topology,
-                                  std::span<const std::int32_t> queries) {
-    const char * prefix = std::getenv("SKINTOKENS_DUMP_MESH_INPUT_PREFIX");
+void dump_mesh_input_if_requested(const sampled_cloud &sampled,
+    std::span<const triangle> topology,
+    std::span<const std::int32_t> queries) {
+    const char *prefix = std::getenv("SKINTOKENS_DUMP_MESH_INPUT_PREFIX");
     if (prefix == nullptr || *prefix == '\0') return;
     const std::filesystem::path base{prefix};
     dump_binary(base.string() + ".points.f32", std::span{sampled.points});
@@ -782,10 +802,10 @@ void dump_mesh_input_if_requested(const sampled_cloud & sampled,
     dump_binary(base.string() + ".queries.i32", queries);
 }
 
-void dump_vae_trace_if_requested(const sampled_cloud & sampled,
-                                 std::span<const std::int32_t> queries,
-                                 std::span<const float> condition) {
-    const char * prefix = std::getenv("SKINTOKENS_DUMP_VAE_TRACE_PREFIX");
+void dump_vae_trace_if_requested(const sampled_cloud &sampled,
+    std::span<const std::int32_t> queries,
+    std::span<const float> condition) {
+    const char *prefix = std::getenv("SKINTOKENS_DUMP_VAE_TRACE_PREFIX");
     if (prefix == nullptr || *prefix == '\0') return;
     const std::filesystem::path base{prefix};
     dump_binary(base.string() + ".points.f32", std::span{sampled.points});
@@ -795,8 +815,8 @@ void dump_vae_trace_if_requested(const sampled_cloud & sampled,
 }
 
 void dump_token_trace_if_requested(std::span<const std::int32_t> prefix,
-                                   std::span<const std::int32_t> codes) {
-    const char * base_value = std::getenv("SKINTOKENS_DUMP_TOKEN_TRACE_PREFIX");
+    std::span<const std::int32_t> codes) {
+    const char *base_value = std::getenv("SKINTOKENS_DUMP_TOKEN_TRACE_PREFIX");
     if (base_value == nullptr || *base_value == '\0') return;
     const std::filesystem::path base{base_value};
     dump_binary(base.string() + ".prefix.i32", prefix);
@@ -804,7 +824,7 @@ void dump_token_trace_if_requested(std::span<const std::int32_t> prefix,
 }
 
 void dump_token_prefix_if_requested(std::span<const std::int32_t> prefix) {
-    const char * path = std::getenv("SKINTOKENS_DUMP_TOKEN_TRACE_PREFIX");
+    const char *path = std::getenv("SKINTOKENS_DUMP_TOKEN_TRACE_PREFIX");
     if (path == nullptr || *path == '\0') return;
     dump_binary(std::string{path} + ".prefix.i32", prefix);
 }
@@ -813,10 +833,10 @@ void dump_token_prefix_if_requested(std::span<const std::int32_t> prefix) {
 
 model::model(std::unique_ptr<impl> value) noexcept : impl_(std::move(value)) {}
 model::model(model &&) noexcept = default;
-model & model::operator=(model &&) noexcept = default;
+model &model::operator=(model &&) noexcept = default;
 model::~model() = default;
 
-result<model> model::load(const std::filesystem::path & bundle, const runtime_options & options) {
+result<model> model::load(const std::filesystem::path &bundle, const runtime_options &options) {
     detail::profile_scope total_profile{"model.load.total"};
     if (!options.files.read && !std::filesystem::is_directory(bundle))
         return std::unexpected(detail::fail(error_code::io, "model bundle must be a directory"));
@@ -829,10 +849,10 @@ result<model> model::load(const std::filesystem::path & bundle, const runtime_op
     if (!skin_vae) return std::unexpected(skin_vae.error());
     if (mesh_encoder->component != "mesh-encoder" || tokenrig->component != "tokenrig" || skin_vae->component != "skin-vae")
         return std::unexpected(detail::fail(error_code::incompatible_model, "model bundle contains a component in the wrong file"));
-    const auto same_identity = [&](const detail::bundle_metadata & value) {
+    const auto same_identity = [&](const detail::bundle_metadata &value) {
         return value.upstream_revision == mesh_encoder->upstream_revision &&
-               value.tokenrig_sha256 == mesh_encoder->tokenrig_sha256 &&
-               value.skin_vae_sha256 == mesh_encoder->skin_vae_sha256;
+            value.tokenrig_sha256 == mesh_encoder->tokenrig_sha256 &&
+            value.skin_vae_sha256 == mesh_encoder->skin_vae_sha256;
     };
     if (!same_identity(*tokenrig) || !same_identity(*skin_vae))
         return std::unexpected(detail::fail(error_code::incompatible_model, "model components have mismatched source identities"));
@@ -854,7 +874,7 @@ result<model> model::load(const std::filesystem::path & bundle, const runtime_op
     return model{std::move(output)};
 }
 
-result<skin> model::rig(const mesh & source, const generation_options & options) const {
+result<skin> model::rig(const mesh &source, const generation_options &options) const {
     detail::profile_scope total_profile{"model.rig.total"};
     auto valid = validate_mesh(source);
     if (!valid) return std::unexpected(valid.error());
@@ -864,16 +884,21 @@ result<skin> model::rig(const mesh & source, const generation_options & options)
     const auto model_vertices = to_model_space(source.vertices);
     vec3 low = model_vertices.front(), high = low;
     for (const auto value : model_vertices) {
-        low.x = std::min(low.x, value.x); low.y = std::min(low.y, value.y); low.z = std::min(low.z, value.z);
-        high.x = std::max(high.x, value.x); high.y = std::max(high.y, value.y); high.z = std::max(high.z, value.z);
+        low.x = std::min(low.x, value.x);
+        low.y = std::min(low.y, value.y);
+        low.z = std::min(low.z, value.z);
+        high.x = std::max(high.x, value.x);
+        high.y = std::max(high.y, value.y);
+        high.z = std::max(high.z, value.z);
     }
     const vec3 center{(low.x + high.x) * 0.5F, (low.y + high.y) * 0.5F, (low.z + high.z) * 0.5F};
-    const float scale = std::max({high.x-low.x, high.y-low.y, high.z-low.z}) * 0.5F;
+    const float scale = std::max({high.x - low.x, high.y - low.y, high.z - low.z}) * 0.5F;
     if (!std::isfinite(scale) || scale <= 1e-12F)
         return std::unexpected(detail::fail(error_code::invalid_argument, "mesh bounds are degenerate"));
-    std::vector<vec3> normalized; normalized.reserve(model_vertices.size());
+    std::vector<vec3> normalized;
+    normalized.reserve(model_vertices.size());
     for (const auto value : model_vertices)
-        normalized.push_back({(value.x-center.x)/scale, (value.y-center.y)/scale, (value.z-center.z)/scale});
+        normalized.push_back({(value.x - center.x) / scale, (value.y - center.y) / scale, (value.z - center.z) / scale});
     auto normals = to_model_space(vertex_normals(source));
     auto sampled = detail::profiled("model.rig.sample_surface", [&] {
         return sample_mesh_surface(source, normalized, normals, options.seed);
@@ -911,15 +936,15 @@ result<skin> model::rig(const mesh & source, const generation_options & options)
     std::vector<vec3> normalized_joints;
     normalized_joints.reserve(model_target->rest_positions.size());
     for (const auto value : model_target->rest_positions)
-        normalized_joints.push_back({(value.x-center.x)/scale, (value.y-center.y)/scale,
-                                     (value.z-center.z)/scale});
+        normalized_joints.push_back({(value.x - center.x) / scale, (value.y - center.y) / scale,
+            (value.z - center.z) / scale});
     return decode_binding(*impl_->skin_vae_weights, impl_->backend->value, target,
         generated->skin_codes, *vae_condition, sampled->points, sampled->normals, normalized,
         source.faces, normalized_joints, options.surface_postprocess,
         normals, sampled->faces, options.robust_transfer);
 }
 
-result<skin> model::bind(const mesh & source, const skeleton & target, const generation_options & options) const {
+result<skin> model::bind(const mesh &source, const skeleton &target, const generation_options &options) const {
     detail::profile_scope total_profile{"model.bind.total"};
     auto valid_mesh = validate_mesh(source);
     if (!valid_mesh) return std::unexpected(valid_mesh.error());
@@ -984,7 +1009,7 @@ std::string_view model::backend_name() const noexcept {
 }
 
 result<motion> fit_motion_to_mesh(
-    const mesh & geometry, const motion & animation, skeleton_fit fit) {
+    const mesh &geometry, const motion &animation, skeleton_fit fit) {
     auto valid_mesh = validate_mesh(geometry);
     if (!valid_mesh) return std::unexpected(valid_mesh.error());
     auto valid_rig = validate_skeleton(animation.rig);
@@ -994,38 +1019,43 @@ result<motion> fit_motion_to_mesh(
         return std::unexpected(detail::fail(error_code::invalid_argument, "motion arrays are incomplete"));
     if (fit == skeleton_fit::none) return animation;
     vec3 mesh_low = geometry.vertices.front(), mesh_high = mesh_low;
-    const auto include = [](vec3 value, vec3 & low, vec3 & high) {
-        low.x = std::min(low.x, value.x); low.y = std::min(low.y, value.y); low.z = std::min(low.z, value.z);
-        high.x = std::max(high.x, value.x); high.y = std::max(high.y, value.y); high.z = std::max(high.z, value.z);
+    const auto include = [](vec3 value, vec3 &low, vec3 &high) {
+        low.x = std::min(low.x, value.x);
+        low.y = std::min(low.y, value.y);
+        low.z = std::min(low.z, value.z);
+        high.x = std::max(high.x, value.x);
+        high.y = std::max(high.y, value.y);
+        high.z = std::max(high.z, value.z);
     };
-    for (const auto & value : geometry.vertices) include(value, mesh_low, mesh_high);
+    for (const auto &value : geometry.vertices) include(value, mesh_low, mesh_high);
     const float mesh_height = mesh_high.y - mesh_low.y;
     if (mesh_height <= 1e-8F)
         return std::unexpected(detail::fail(error_code::invalid_argument, "cannot fit degenerate mesh or skeleton bounds"));
     const vec3 mesh_center{(mesh_low.x + mesh_high.x) * 0.5F, 0.0F,
-                           (mesh_low.z + mesh_high.z) * 0.5F};
+        (mesh_low.z + mesh_high.z) * 0.5F};
     // Uniform scale and translation onto the mesh's vertical extent and centre.
     // Candidate rest poses are each placed this way before being scored, so the
     // comparison is between poses rather than between framings.
-    struct placement { float scale; vec3 offset; };
-    const auto place = [&](const std::vector<vec3> & rest) -> std::optional<placement> {
+    struct placement {
+        float scale;
+        vec3 offset;
+    };
+    const auto place = [&](const std::vector<vec3> &rest) -> std::optional<placement> {
         vec3 low = rest.front(), high = low;
-        for (const auto & value : rest) include(value, low, high);
+        for (const auto &value : rest) include(value, low, high);
         const float height = high.y - low.y;
         if (height <= 1e-8F) return std::nullopt;
         const float factor = mesh_height / height;
-        return placement{factor, vec3{mesh_center.x - (low.x + high.x) * 0.5F * factor,
-                                      mesh_low.y - low.y * factor,
-                                      mesh_center.z - (low.z + high.z) * 0.5F * factor}};
+        return placement{factor, vec3{mesh_center.x - (low.x + high.x) * 0.5F * factor, mesh_low.y - low.y * factor, mesh_center.z - (low.z + high.z) * 0.5F * factor}};
     };
-    const auto apply = [](const placement & value, vec3 point) {
+    const auto apply = [](const placement &value, vec3 point) {
         return vec3{point.x * value.scale + value.offset.x, point.y * value.scale + value.offset.y,
-                    point.z * value.scale + value.offset.z};
+            point.z * value.scale + value.offset.z};
     };
-    const auto placed = [&](const placement & value, const std::vector<vec3> & rest) {
+    const auto placed = [&](const placement &value, const std::vector<vec3> &rest) {
         std::vector<vec3> result;
         result.reserve(rest.size());
-        for (const auto & point : rest) result.push_back(apply(value, point));
+        for (const auto &point : rest) result.push_back(apply(value, point));
         return result;
     };
     motion source = animation;
@@ -1055,7 +1085,7 @@ result<motion> fit_motion_to_mesh(
     const float global_scale = chosen->scale;
     const auto transform = [&](vec3 value) { return apply(*chosen, value); };
     motion output = source;
-    for (auto & value : output.rig.rest_positions) value = transform(value);
+    for (auto &value : output.rig.rest_positions) value = transform(value);
     std::vector<quat> rest_corrections(output.rig.names.size());
     // Optional articulated fitting follows the invariant central to automatic
     // skeleton embedding (Baran & Popovic, SIGGRAPH 2007): pose the template,
@@ -1064,7 +1094,7 @@ result<motion> fit_motion_to_mesh(
     // both globally scaled segment lengths exactly. This small bounded solver
     // avoids pulling Pinocchio's complete LGPL rigging/weighting pipeline into
     // the GGML runtime and can later be replaced by a fuller embedding stage.
-    const auto articulate_arm = [&](const arm_chain & chain) {
+    const auto articulate_arm = [&](const arm_chain &chain) {
         const auto shoulder = find_joint(output.rig, chain.shoulder);
         const auto elbow = find_joint(output.rig, chain.elbow);
         const auto wrist = find_joint(output.rig, chain.wrist);
@@ -1104,7 +1134,7 @@ result<motion> fit_motion_to_mesh(
         const float maximum_reach = std::max(minimum_reach, (upper_length + lower_length) * 0.98F);
         const float reach = std::clamp(length(target_offset), minimum_reach, maximum_reach);
         const float along = (upper_length * upper_length - lower_length * lower_length + reach * reach) /
-                            (2.0F * reach);
+            (2.0F * reach);
         const float away = std::sqrt(std::max(0.0F, upper_length * upper_length - along * along));
         auto bend = sub(sub(desired_elbow, anchor), scale(direction, dot(sub(desired_elbow, anchor), direction)));
         if (length(bend) <= 1.0e-7F)
@@ -1131,14 +1161,14 @@ result<motion> fit_motion_to_mesh(
             while (parent >= 0 && static_cast<std::size_t>(parent) != *wrist)
                 parent = output.rig.parents[static_cast<std::size_t>(parent)];
             if (parent >= 0) {
-                auto & value = output.rig.rest_positions[candidate];
+                auto &value = output.rig.rest_positions[candidate];
                 value = add(new_wrist, rotate(hand_rotation, sub(value, old_wrist)));
                 rest_corrections[candidate] = hand_rotation;
             }
         }
     };
     if (fit == skeleton_fit::articulated) {
-        for (const auto & chain : arm_chains) articulate_arm(chain);
+        for (const auto &chain : arm_chains) articulate_arm(chain);
         // If a parent-local rest offset changes from o to A*o, transfer the
         // original local rotation q as A_parent*q*inverse(A_joint). This is the
         // standard change-of-rest-frame relation. It prevents applying both
@@ -1149,9 +1179,9 @@ result<motion> fit_motion_to_mesh(
             for (std::size_t joint_index = 0; joint_index < joint_count; ++joint_index) {
                 const auto parent = output.rig.parents[joint_index];
                 const quat parent_correction = parent < 0 ? quat{} :
-                    rest_corrections[static_cast<std::size_t>(parent)];
-                output.local_rotations[frame*joint_count+joint_index] = normalized(multiply(
-                    multiply(parent_correction, source.local_rotations[frame*joint_count+joint_index]),
+                                                            rest_corrections[static_cast<std::size_t>(parent)];
+                output.local_rotations[frame * joint_count + joint_index] = normalized(multiply(
+                    multiply(parent_correction, source.local_rotations[frame * joint_count + joint_index]),
                     conjugate(rest_corrections[joint_index])));
             }
         }
@@ -1168,15 +1198,15 @@ result<motion> fit_motion_to_mesh(
     // Uniform scale and translation do not change local rotational frames.
     const vec3 first_root = source.root_translations.front();
     const vec3 fitted_root = output.rig.rest_positions.front();
-    for (auto & value : output.root_translations) {
+    for (auto &value : output.root_translations) {
         value = {fitted_root.x + (value.x - first_root.x) * global_scale,
-                 fitted_root.y + (value.y - first_root.y) * global_scale,
-                 fitted_root.z + (value.z - first_root.z) * global_scale};
+            fitted_root.y + (value.y - first_root.y) * global_scale,
+            fitted_root.z + (value.z - first_root.z) * global_scale};
     }
     return output;
 }
 
-result<motion> fit_motion_to_mesh(const mesh & geometry, const motion & animation) {
+result<motion> fit_motion_to_mesh(const mesh &geometry, const motion &animation) {
     return fit_motion_to_mesh(geometry, animation, skeleton_fit::global_similarity);
 }
 

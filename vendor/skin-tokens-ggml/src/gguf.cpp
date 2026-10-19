@@ -12,18 +12,19 @@ constexpr std::uint64_t max_string = 16U * 1024U * 1024U;
 constexpr std::uint64_t max_metadata = 100000U;
 constexpr std::uint64_t max_tensors = 1000000U;
 
-template<class T> bool read(std::istream & stream, T & value) {
+template<class T>
+bool read(std::istream &stream, T &value) {
     return static_cast<bool>(stream.read(reinterpret_cast<char *>(&value), sizeof(value)));
 }
 
-bool read_string(std::istream & stream, std::string & output) {
+bool read_string(std::istream &stream, std::string &output) {
     std::uint64_t size = 0;
     if (!read(stream, size) || size > max_string) return false;
     output.resize(static_cast<std::size_t>(size));
     return size == 0 || static_cast<bool>(stream.read(output.data(), static_cast<std::streamsize>(size)));
 }
 
-bool skip_scalar(std::istream & stream, std::uint32_t kind) {
+bool skip_scalar(std::istream &stream, std::uint32_t kind) {
     static constexpr std::array<unsigned, 12> widths{1, 1, 2, 2, 4, 4, 4, 1, 0, 0, 8, 8};
     if (kind >= widths.size() || widths[kind] == 0) return false;
     stream.seekg(static_cast<std::streamoff>(widths[kind]), std::ios::cur);
@@ -32,9 +33,9 @@ bool skip_scalar(std::istream & stream, std::uint32_t kind) {
 
 } // namespace
 
-result<bundle_metadata> inspect_gguf(const std::filesystem::path & path, const file_source & files) {
+result<bundle_metadata> inspect_gguf(const std::filesystem::path &path, const file_source &files) {
     auto source = open_source(path, files);
-    std::istream & stream = *source;
+    std::istream &stream = *source;
     if (!stream) return std::unexpected(fail(error_code::io, "cannot open GGUF component: " + path.string()));
     std::uint32_t magic = 0;
     std::uint32_t version = 0;

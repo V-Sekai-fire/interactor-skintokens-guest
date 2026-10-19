@@ -16,7 +16,7 @@ float squared_distance(vec3 left, vec3 right) {
     const float x = left.x - right.x;
     const float y = left.y - right.y;
     const float z = left.z - right.z;
-    return x*x + y*y + z*z;
+    return x * x + y * y + z * z;
 }
 
 float distance(vec3 left, vec3 right) {
@@ -29,7 +29,7 @@ struct grid_cell {
 };
 
 struct grid_cell_hash {
-    std::size_t operator()(const grid_cell & value) const noexcept {
+    std::size_t operator()(const grid_cell &value) const noexcept {
         // Copied from Open3D 0.19 utility::hash_eigen. VoxelGrid stores its
         // cells in an unordered_map and get_voxels() exposes that iteration
         // order; upstream then feeds the resulting order to SciPy cKDTree.
@@ -41,7 +41,9 @@ struct grid_cell_hash {
     }
 };
 
-struct dvec3 { double x, y, z; };
+struct dvec3 {
+    double x, y, z;
+};
 
 // Minimal k=1 port of SciPy 1.15.3 cKDTree's default balanced/compact tree.
 // SkinTokens uses cKDTree at the final voxel_skin stage, and its first-hit
@@ -69,8 +71,9 @@ class scipy_point_tree {
     std::array<double, 3> minimum_{};
     std::array<double, 3> maximum_{};
 
-    static double coordinate(const dvec3 & value, std::size_t dimension) {
-        return dimension == 0U ? value.x : dimension == 1U ? value.y : value.z;
+    static double coordinate(const dvec3 &value, std::size_t dimension) {
+        return dimension == 0U ? value.x : dimension == 1U ? value.y :
+                                                             value.z;
     }
 
     std::size_t build(std::size_t begin, std::size_t end) {
@@ -111,7 +114,7 @@ class scipy_point_tree {
         if (pivot == begin) {
             const auto smallest = *std::min_element(first, last, compare);
             split = std::nextafter(coordinate(points_[smallest], dimension),
-                                   std::numeric_limits<double>::infinity());
+                std::numeric_limits<double>::infinity());
             partition = std::partition(first, last, [&](std::size_t index) {
                 return coordinate(points_[index], dimension) < split;
             });
@@ -137,7 +140,7 @@ class scipy_point_tree {
 
     // SciPy's heap compares priorities only and leaves equal-priority entries
     // in insertion order. Reproduce that rather than adding an index tie-break.
-    static void heap_push(std::vector<pending_item> & heap, pending_item item) {
+    static void heap_push(std::vector<pending_item> &heap, pending_item item) {
         heap.push_back(item);
         std::size_t index = heap.size() - 1U;
         while (index > 0U) {
@@ -148,7 +151,7 @@ class scipy_point_tree {
         }
     }
 
-    static pending_item heap_pop(std::vector<pending_item> & heap) {
+    static pending_item heap_pop(std::vector<pending_item> &heap) {
         auto output = heap.front();
         heap.front() = heap.back();
         heap.pop_back();
@@ -174,7 +177,7 @@ public:
         std::iota(order_.begin(), order_.end(), 0U);
         for (std::size_t dimension = 0U; dimension < 3U; ++dimension)
             minimum_[dimension] = maximum_[dimension] = coordinate(points_.front(), dimension);
-        for (const auto & point : points_)
+        for (const auto &point : points_)
             for (std::size_t dimension = 0U; dimension < 3U; ++dimension) {
                 minimum_[dimension] = std::min(minimum_[dimension], coordinate(point, dimension));
                 maximum_[dimension] = std::max(maximum_[dimension], coordinate(point, dimension));
@@ -190,7 +193,8 @@ public:
         for (std::size_t dimension = 0U; dimension < 3U; ++dimension) {
             const auto value = coordinate(query, dimension);
             const auto delta = value < minimum_[dimension] ? minimum_[dimension] - value :
-                               value > maximum_[dimension] ? value - maximum_[dimension] : 0.0;
+                value > maximum_[dimension]                ? value - maximum_[dimension] :
+                                                             0.0;
             side[dimension] = delta * delta;
             initial_distance += side[dimension];
         }
@@ -200,14 +204,14 @@ public:
         double best_distance = std::numeric_limits<double>::infinity();
         std::size_t best = points_.size();
         while (true) {
-            const auto & current_node = nodes_[current.node_index];
+            const auto &current_node = nodes_[current.node_index];
             if (current_node.split_dimension < 0) {
                 for (std::size_t item = current_node.begin; item < current_node.end; ++item) {
                     const auto index = order_[item];
                     const auto dx = points_[index].x - query.x;
                     const auto dy = points_[index].y - query.y;
                     const auto dz = points_[index].z - query.z;
-                    const auto candidate = dx*dx + dy*dy + dz*dz;
+                    const auto candidate = dx * dx + dy * dy + dz * dz;
                     if (candidate < best_distance) {
                         best_distance = candidate;
                         best = index;
@@ -222,7 +226,8 @@ public:
             auto far = current;
             const auto query_coordinate = coordinate(query, dimension);
             const auto delta = query_coordinate < current_node.split ?
-                current_node.split - query_coordinate : query_coordinate - current_node.split;
+                current_node.split - query_coordinate :
+                query_coordinate - current_node.split;
             if (query_coordinate < current_node.split) {
                 current.node_index = current_node.less;
                 far.node_index = current_node.greater;
@@ -246,7 +251,8 @@ public:
         for (std::size_t dimension = 0U; dimension < 3U; ++dimension) {
             const auto value = coordinate(query, dimension);
             const auto delta = value < minimum_[dimension] ? minimum_[dimension] - value :
-                               value > maximum_[dimension] ? value - maximum_[dimension] : 0.0;
+                value > maximum_[dimension]                ? value - maximum_[dimension] :
+                                                             0.0;
             side[dimension] = delta * delta;
             initial_distance += side[dimension];
         }
@@ -257,14 +263,14 @@ public:
         std::priority_queue<neighbor> neighbors;
         double distance_upper_bound = std::numeric_limits<double>::infinity();
         while (true) {
-            const auto & current_node = nodes_[current.node_index];
+            const auto &current_node = nodes_[current.node_index];
             if (current_node.split_dimension < 0) {
                 for (std::size_t item = current_node.begin; item < current_node.end; ++item) {
                     const auto index = order_[item];
                     const auto dx = points_[index].x - query.x;
                     const auto dy = points_[index].y - query.y;
                     const auto dz = points_[index].z - query.z;
-                    const auto candidate = dx*dx + dy*dy + dz*dz;
+                    const auto candidate = dx * dx + dy * dy + dz * dz;
                     if (candidate < distance_upper_bound) {
                         if (neighbors.size() == count) neighbors.pop();
                         neighbors.emplace(candidate, static_cast<std::uint32_t>(index));
@@ -280,7 +286,8 @@ public:
             auto far = current;
             const auto query_coordinate = coordinate(query, dimension);
             const auto delta = query_coordinate < current_node.split ?
-                current_node.split - query_coordinate : query_coordinate - current_node.split;
+                current_node.split - query_coordinate :
+                query_coordinate - current_node.split;
             if (query_coordinate < current_node.split) {
                 current.node_index = current_node.less;
                 far.node_index = current_node.greater;
@@ -302,25 +309,28 @@ public:
     }
 };
 
-dvec3 subtract(dvec3 a, dvec3 b) { return {a.x-b.x, a.y-b.y, a.z-b.z}; }
+dvec3 subtract(dvec3 a, dvec3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 dvec3 cross(dvec3 a, dvec3 b) {
-    return {a.y*b.z-a.z*b.y, a.z*b.x-a.x*b.z, a.x*b.y-a.y*b.x};
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
-double dot(dvec3 a, dvec3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
+double dot(dvec3 a, dvec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
 // Separating-axis triangle/AABB test used by Open3D's mesh voxelizer.
 bool triangle_box(dvec3 center, dvec3 half, dvec3 a, dvec3 b, dvec3 c) {
-    a = subtract(a, center); b = subtract(b, center); c = subtract(c, center);
+    a = subtract(a, center);
+    b = subtract(b, center);
+    c = subtract(c, center);
     const dvec3 edges[]{subtract(b, a), subtract(c, b), subtract(a, c)};
-    const dvec3 box_axes[]{{1,0,0}, {0,1,0}, {0,0,1}};
+    const dvec3 box_axes[]{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
     const auto overlap = [&](dvec3 axis) {
         const double magnitude = dot(axis, axis);
         if (magnitude <= 1.0e-30) return true;
-        const double pa=dot(a,axis), pb=dot(b,axis), pc=dot(c,axis);
-        const double radius=half.x*std::abs(axis.x)+half.y*std::abs(axis.y)+half.z*std::abs(axis.z);
-        return std::min({pa,pb,pc}) <= radius && std::max({pa,pb,pc}) >= -radius;
+        const double pa = dot(a, axis), pb = dot(b, axis), pc = dot(c, axis);
+        const double radius = half.x * std::abs(axis.x) + half.y * std::abs(axis.y) + half.z * std::abs(axis.z);
+        return std::min({pa, pb, pc}) <= radius && std::max({pa, pb, pc}) >= -radius;
     };
-    for (const auto axis : box_axes) if (!overlap(axis)) return false;
+    for (const auto axis : box_axes)
+        if (!overlap(axis)) return false;
     if (!overlap(cross(edges[0], edges[1]))) return false;
     for (const auto edge : edges)
         for (const auto axis : box_axes)
@@ -332,44 +342,46 @@ std::vector<grid_cell> voxelize_like_open3d(
     std::span<const vec3> vertices, std::span<const triangle> faces, double voxel_size) {
     dvec3 minimum{vertices.front().x, vertices.front().y, vertices.front().z};
     for (const auto value : vertices) {
-        minimum.x=std::min(minimum.x,static_cast<double>(value.x));
-        minimum.y=std::min(minimum.y,static_cast<double>(value.y));
-        minimum.z=std::min(minimum.z,static_cast<double>(value.z));
+        minimum.x = std::min(minimum.x, static_cast<double>(value.x));
+        minimum.y = std::min(minimum.y, static_cast<double>(value.y));
+        minimum.z = std::min(minimum.z, static_cast<double>(value.z));
     }
-    minimum.x-=voxel_size*.5; minimum.y-=voxel_size*.5; minimum.z-=voxel_size*.5;
-    const dvec3 half{voxel_size*.5,voxel_size*.5,voxel_size*.5};
+    minimum.x -= voxel_size * .5;
+    minimum.y -= voxel_size * .5;
+    minimum.z -= voxel_size * .5;
+    const dvec3 half{voxel_size * .5, voxel_size * .5, voxel_size * .5};
     std::unordered_map<grid_cell, bool, grid_cell_hash> occupied;
     for (const auto face : faces) {
-        if (face[0]>=vertices.size() || face[1]>=vertices.size() || face[2]>=vertices.size()) continue;
+        if (face[0] >= vertices.size() || face[1] >= vertices.size() || face[2] >= vertices.size()) continue;
         const dvec3 value[]{
-            {vertices[face[0]].x,vertices[face[0]].y,vertices[face[0]].z},
-            {vertices[face[1]].x,vertices[face[1]].y,vertices[face[1]].z},
-            {vertices[face[2]].x,vertices[face[2]].y,vertices[face[2]].z}};
-        const dvec3 low{std::min({value[0].x,value[1].x,value[2].x}),
-                        std::min({value[0].y,value[1].y,value[2].y}),
-                        std::min({value[0].z,value[1].z,value[2].z})};
-        const dvec3 high{std::max({value[0].x,value[1].x,value[2].x}),
-                         std::max({value[0].y,value[1].y,value[2].y}),
-                         std::max({value[0].z,value[1].z,value[2].z})};
-        const std::int64_t ix=static_cast<std::int64_t>(std::floor((low.x-minimum.x)/voxel_size));
-        const std::int64_t iy=static_cast<std::int64_t>(std::floor((low.y-minimum.y)/voxel_size));
-        const std::int64_t iz=static_cast<std::int64_t>(std::floor((low.z-minimum.z)/voxel_size));
-        const std::int64_t nx=static_cast<std::int64_t>(std::round((high.x-low.x)/voxel_size))+2;
-        const std::int64_t ny=static_cast<std::int64_t>(std::round((high.y-low.y)/voxel_size))+2;
-        const std::int64_t nz=static_cast<std::int64_t>(std::round((high.z-low.z)/voxel_size))+2;
-        for (std::int64_t x=ix; x<ix+nx; ++x)
-            for (std::int64_t y=iy; y<iy+ny; ++y)
-                for (std::int64_t z=iz; z<iz+nz; ++z) {
-                    const dvec3 center{minimum.x+(static_cast<double>(x)+.5)*voxel_size,
-                                       minimum.y+(static_cast<double>(y)+.5)*voxel_size,
-                                       minimum.z+(static_cast<double>(z)+.5)*voxel_size};
+            {vertices[face[0]].x, vertices[face[0]].y, vertices[face[0]].z},
+            {vertices[face[1]].x, vertices[face[1]].y, vertices[face[1]].z},
+            {vertices[face[2]].x, vertices[face[2]].y, vertices[face[2]].z}};
+        const dvec3 low{std::min({value[0].x, value[1].x, value[2].x}),
+            std::min({value[0].y, value[1].y, value[2].y}),
+            std::min({value[0].z, value[1].z, value[2].z})};
+        const dvec3 high{std::max({value[0].x, value[1].x, value[2].x}),
+            std::max({value[0].y, value[1].y, value[2].y}),
+            std::max({value[0].z, value[1].z, value[2].z})};
+        const std::int64_t ix = static_cast<std::int64_t>(std::floor((low.x - minimum.x) / voxel_size));
+        const std::int64_t iy = static_cast<std::int64_t>(std::floor((low.y - minimum.y) / voxel_size));
+        const std::int64_t iz = static_cast<std::int64_t>(std::floor((low.z - minimum.z) / voxel_size));
+        const std::int64_t nx = static_cast<std::int64_t>(std::round((high.x - low.x) / voxel_size)) + 2;
+        const std::int64_t ny = static_cast<std::int64_t>(std::round((high.y - low.y) / voxel_size)) + 2;
+        const std::int64_t nz = static_cast<std::int64_t>(std::round((high.z - low.z) / voxel_size)) + 2;
+        for (std::int64_t x = ix; x < ix + nx; ++x)
+            for (std::int64_t y = iy; y < iy + ny; ++y)
+                for (std::int64_t z = iz; z < iz + nz; ++z) {
+                    const dvec3 center{minimum.x + (static_cast<double>(x) + .5) * voxel_size,
+                        minimum.y + (static_cast<double>(y) + .5) * voxel_size,
+                        minimum.z + (static_cast<double>(z) + .5) * voxel_size};
                     if (triangle_box(center, half, value[0], value[1], value[2]))
-                        occupied[{x,y,z}]=true;
+                        occupied[{x, y, z}] = true;
                 }
     }
     std::vector<grid_cell> result;
     result.reserve(occupied.size());
-    for (const auto & [value, unused] : occupied) result.push_back(value);
+    for (const auto &[value, unused] : occupied) result.push_back(value);
     return result;
 }
 
@@ -397,22 +409,21 @@ surface_result surface_weights(
     // spread within any one vertex, rather than the mesh AABB's largest axis.
     double maximum_spread = 0.0;
     for (const auto value : vertices)
-        maximum_spread=std::max(maximum_spread, static_cast<double>(
-            std::max({value.x,value.y,value.z})-std::min({value.x,value.y,value.z})));
-    const double voxel_size=maximum_spread/196.0;
-    const auto grid=voxelize_like_open3d(vertices,faces,voxel_size);
-    const std::size_t mesh_count=vertices.size(), total_count=mesh_count+grid.size();
+        maximum_spread = std::max(maximum_spread, static_cast<double>(std::max({value.x, value.y, value.z}) - std::min({value.x, value.y, value.z})));
+    const double voxel_size = maximum_spread / 196.0;
+    const auto grid = voxelize_like_open3d(vertices, faces, voxel_size);
+    const std::size_t mesh_count = vertices.size(), total_count = mesh_count + grid.size();
     const auto position = [&](std::size_t index) {
-        if (index<mesh_count) return vertices[index];
-        const auto value=grid[index-mesh_count];
-        return vec3{static_cast<float>(value.x),static_cast<float>(value.y),static_cast<float>(value.z)};
+        if (index < mesh_count) return vertices[index];
+        const auto value = grid[index - mesh_count];
+        return vec3{static_cast<float>(value.x), static_cast<float>(value.y), static_cast<float>(value.z)};
     };
     std::vector<dvec3> combined;
     combined.reserve(total_count);
     for (const auto value : vertices) combined.push_back({value.x, value.y, value.z});
     for (const auto value : grid)
         combined.push_back({static_cast<double>(value.x), static_cast<double>(value.y),
-                            static_cast<double>(value.z)});
+            static_cast<double>(value.z)});
     const scipy_point_tree combined_tree{std::move(combined)};
     using edge = std::pair<std::uint32_t, float>;
     std::unordered_map<std::uint64_t, float> directed_edges;
@@ -429,7 +440,7 @@ surface_result surface_weights(
     const auto connect = [&](std::uint32_t left, std::uint32_t right) {
         connect_weighted(left, right, distance(position(left), position(right)));
     };
-    for (const auto & face : faces) {
+    for (const auto &face : faces) {
         connect(face[0], face[1]);
         connect(face[1], face[2]);
         connect(face[2], face[0]);
@@ -446,13 +457,13 @@ surface_result surface_weights(
     const scipy_point_tree vertex_tree{std::move(vertex_points)};
     const auto precise_position = [&](std::size_t index) {
         if (precise_vertices.size() == vertices.size()) return precise_vertices[index];
-        const auto value=vertices[index];
-        return precise_vec3{value.x,value.y,value.z};
+        const auto value = vertices[index];
+        return precise_vec3{value.x, value.y, value.z};
     };
     const auto close_cell = [](precise_vec3 value) {
         return grid_cell{static_cast<std::int64_t>(std::floor(value.x / link_distance)),
-                         static_cast<std::int64_t>(std::floor(value.y / link_distance)),
-                         static_cast<std::int64_t>(std::floor(value.z / link_distance))};
+            static_cast<std::int64_t>(std::floor(value.y / link_distance)),
+            static_cast<std::int64_t>(std::floor(value.z / link_distance))};
     };
     std::unordered_map<grid_cell, std::vector<std::uint32_t>, grid_cell_hash> close_buckets;
     close_buckets.reserve(vertices.size());
@@ -460,23 +471,23 @@ surface_result surface_weights(
         close_buckets[close_cell(precise_position(vertex))].push_back(static_cast<std::uint32_t>(vertex));
     for (std::size_t vertex = 0; vertex < vertices.size(); ++vertex) {
         std::vector<std::pair<double, std::uint32_t>> nearest;
-        const auto point=precise_position(vertex);
+        const auto point = precise_position(vertex);
         const auto home = close_cell(point);
-        for (std::int64_t x=-1; x<=1; ++x)
-            for (std::int64_t y=-1; y<=1; ++y)
-                for (std::int64_t z=-1; z<=1; ++z) {
-                    const auto found=close_buckets.find({home.x+x,home.y+y,home.z+z});
-                    if (found==close_buckets.end()) continue;
+        for (std::int64_t x = -1; x <= 1; ++x)
+            for (std::int64_t y = -1; y <= 1; ++y)
+                for (std::int64_t z = -1; z <= 1; ++z) {
+                    const auto found = close_buckets.find({home.x + x, home.y + y, home.z + z});
+                    if (found == close_buckets.end()) continue;
                     for (const auto candidate : found->second) {
-                        const auto other=precise_position(candidate);
-                        const double dx=point.x-other.x,dy=point.y-other.y,dz=point.z-other.z;
-                        const double squared=dx*dx+dy*dy+dz*dz;
-                        if (squared < static_cast<double>(link_distance)*link_distance)
-                            nearest.emplace_back(squared,candidate);
+                        const auto other = precise_position(candidate);
+                        const double dx = point.x - other.x, dy = point.y - other.y, dz = point.z - other.z;
+                        const double squared = dx * dx + dy * dy + dz * dz;
+                        if (squared < static_cast<double>(link_distance) * link_distance)
+                            nearest.emplace_back(squared, candidate);
                     }
                 }
-        std::sort(nearest.begin(),nearest.end());
-        if (nearest.size()>4U) nearest.resize(4U);
+        std::sort(nearest.begin(), nearest.end());
+        if (nearest.size() > 4U) nearest.resize(4U);
         // cKDTree.query(vertices, 4) discards the first returned neighbour,
         // even when coincident seam duplicates mean that it is not `vertex`.
         for (std::size_t index = 1U; index < nearest.size(); ++index) {
@@ -490,14 +501,14 @@ surface_result surface_weights(
     // grid coordinates never pass upstream's grid-to-grid distance mask.
     // Grid-to-mesh links can only exist for the handful of integer positions
     // lying inside the normalized mesh bounds; evaluate those exactly.
-    const float grid_range=static_cast<float>(voxel_size*1.74);
-    for (std::size_t grid_index=0; grid_index<grid.size(); ++grid_index) {
+    const float grid_range = static_cast<float>(voxel_size * 1.74);
+    for (std::size_t grid_index = 0; grid_index < grid.size(); ++grid_index) {
         const vec3 grid_position{static_cast<float>(grid[grid_index].x),
-                                 static_cast<float>(grid[grid_index].y),
-                                 static_cast<float>(grid[grid_index].z)};
+            static_cast<float>(grid[grid_index].y),
+            static_cast<float>(grid[grid_index].z)};
         const auto nearest = vertex_tree.nearest(
             {grid_position.x, grid_position.y, grid_position.z}, 27U);
-        for (const auto & [squared, vertex] : nearest) {
+        for (const auto &[squared, vertex] : nearest) {
             const float candidate = std::sqrt(squared);
             if (candidate > 0.0F && candidate < grid_range)
                 connect(static_cast<std::uint32_t>(mesh_count + grid_index), vertex);
@@ -515,18 +526,18 @@ surface_result surface_weights(
     const std::size_t joint_count = joints.size();
     const auto precise_joint_position = [&](std::size_t index) {
         if (precise_joints.size() == joints.size()) return precise_joints[index];
-        const auto value=joints[index];
-        return precise_vec3{value.x,value.y,value.z};
+        const auto value = joints[index];
+        return precise_vec3{value.x, value.y, value.z};
     };
     std::vector<float> distances(total_count * joint_count,
-                                 std::numeric_limits<float>::infinity());
+        std::numeric_limits<float>::infinity());
     using queued = std::pair<float, std::uint32_t>;
     std::vector<std::uint32_t> seeds(joint_count);
     for (std::size_t joint = 0; joint < joint_count; ++joint) {
         const auto seed = combined_tree.nearest(
             {joints[joint].x, joints[joint].y, joints[joint].z});
-        auto * row = distances.data() + joint * total_count;
-        seeds[joint]=seed;
+        auto *row = distances.data() + joint * total_count;
+        seeds[joint] = seed;
         row[seed] = 0.0F;
         std::priority_queue<queued, std::vector<queued>, std::greater<>> pending;
         pending.emplace(0.0F, seed);
@@ -551,35 +562,35 @@ surface_result surface_weights(
         for (std::size_t joint = 0; joint < joint_count; ++joint)
             unreachable = unreachable && !std::isfinite(distances[joint * total_count + vertex]);
         if (unreachable) {
-            const auto point=precise_position(vertex);
-            std::vector<std::pair<double,std::uint32_t>> nearest;
+            const auto point = precise_position(vertex);
+            std::vector<std::pair<double, std::uint32_t>> nearest;
             nearest.reserve(joint_count);
-            for (std::size_t joint=0; joint<joint_count; ++joint) {
-                const auto other=precise_joint_position(joint);
-                const double x=point.x-other.x,y=point.y-other.y,z=point.z-other.z;
-                nearest.emplace_back(x*x+y*y+z*z,static_cast<std::uint32_t>(joint));
+            for (std::size_t joint = 0; joint < joint_count; ++joint) {
+                const auto other = precise_joint_position(joint);
+                const double x = point.x - other.x, y = point.y - other.y, z = point.z - other.z;
+                nearest.emplace_back(x * x + y * y + z * z, static_cast<std::uint32_t>(joint));
             }
-            std::partial_sort(nearest.begin(),nearest.begin()+3,nearest.end(),
-                [](const auto & left,const auto & right) {
-                    return left.first!=right.first ? left.first<right.first : left.second>right.second;
-                });
-            for (std::size_t index=0; index<3U; ++index)
-                distances[static_cast<std::size_t>(nearest[index].second)*total_count+vertex]=
+            std::partial_sort(nearest.begin(), nearest.begin() + 3, nearest.end(),
+                [](const auto &left, const auto &right) {
+                return left.first != right.first ? left.first < right.first : left.second > right.second;
+            });
+            for (std::size_t index = 0; index < 3U; ++index)
+                distances[static_cast<std::size_t>(nearest[index].second) * total_count + vertex] =
                     static_cast<float>(std::sqrt(nearest[index].first));
         }
     }
     float maximum = 0.0F;
-    for (std::size_t joint=0; joint<joint_count; ++joint)
-        for (std::size_t vertex=0; vertex<mesh_count; ++vertex) {
-            const float value=distances[joint*total_count+vertex];
-            if (std::isfinite(value)) maximum=std::max(maximum,value);
+    for (std::size_t joint = 0; joint < joint_count; ++joint)
+        for (std::size_t vertex = 0; vertex < mesh_count; ++vertex) {
+            const float value = distances[joint * total_count + vertex];
+            if (std::isfinite(value)) maximum = std::max(maximum, value);
         }
     maximum = std::max(maximum, 1.0e-6F);
-    for (std::size_t joint=0; joint<joint_count; ++joint)
-        for (std::size_t vertex=0; vertex<mesh_count; ++vertex) {
-            auto & value=distances[joint*total_count+vertex];
-            if (!std::isfinite(value)) value=maximum;
-            value=std::max(value,1.0e-6F);
+    for (std::size_t joint = 0; joint < joint_count; ++joint)
+        for (std::size_t vertex = 0; vertex < mesh_count; ++vertex) {
+            auto &value = distances[joint * total_count + vertex];
+            if (!std::isfinite(value)) value = maximum;
+            value = std::max(value, 1.0e-6F);
         }
 
     std::vector<float> output(vertices.size() * joint_count);
@@ -597,9 +608,9 @@ surface_result surface_weights(
                 output[vertex * joint_count + joint] /= sum;
     }
     surface_result result;
-    result.weights=std::move(output);
-    result.seeds=std::move(seeds);
-    result.graph_edges=directed_edges.size();
+    result.weights = std::move(output);
+    result.seeds = std::move(seeds);
+    result.graph_edges = directed_edges.size();
     result.graph_sources.reserve(directed_edges.size());
     result.graph_targets.reserve(directed_edges.size());
     result.graph_weights.reserve(directed_edges.size());
@@ -608,13 +619,13 @@ surface_result surface_weights(
         result.graph_targets.push_back(static_cast<std::uint32_t>(key & 0xffffffffU));
         result.graph_weights.push_back(weight);
     }
-    result.maximum_distance=maximum;
+    result.maximum_distance = maximum;
     result.distances.resize(joint_count * mesh_count);
-    for (std::size_t joint=0; joint<joint_count; ++joint)
-        std::copy_n(distances.data()+joint*total_count, mesh_count,
-                    result.distances.data()+joint*mesh_count);
-    result.voxel_coordinates.reserve(grid.size()*3U);
-    for (const auto value:grid) {
+    for (std::size_t joint = 0; joint < joint_count; ++joint)
+        std::copy_n(distances.data() + joint * total_count, mesh_count,
+            result.distances.data() + joint * mesh_count);
+    result.voxel_coordinates.reserve(grid.size() * 3U);
+    for (const auto value : grid) {
         result.voxel_coordinates.push_back(static_cast<std::int32_t>(value.x));
         result.voxel_coordinates.push_back(static_cast<std::int32_t>(value.y));
         result.voxel_coordinates.push_back(static_cast<std::int32_t>(value.z));
@@ -623,12 +634,12 @@ surface_result surface_weights(
 }
 
 skin integrate(
-    const skeleton & target,
+    const skeleton &target,
     std::span<const vec3> normalized_vertices,
     std::span<const vec3> sampled_points,
     std::span<const std::vector<float>> dense_joint_weights,
     std::span<const float> locality,
-    binding_trace * trace) {
+    binding_trace *trace) {
     skin output;
     output.rig = target;
     output.learned = true;
@@ -645,7 +656,10 @@ skin integrate(
     sampled_double.reserve(sampled_points.size());
     for (const auto value : sampled_points) sampled_double.push_back({value.x, value.y, value.z});
     const scipy_point_tree tree{std::move(sampled_double)};
-    struct binding_candidate { float learned_weight; std::uint16_t joint; };
+    struct binding_candidate {
+        float learned_weight;
+        std::uint16_t joint;
+    };
     for (std::size_t vertex = 0; vertex < normalized_vertices.size(); ++vertex) {
         const auto point = normalized_vertices[vertex];
         const auto neighbors = tree.nearest({point.x, point.y, point.z}, 8U);
@@ -677,7 +691,7 @@ skin integrate(
         // normalization does not change the ranking, but retaining it here
         // makes the final dense trace match the actual upstream endpoint.
         if (!locality.empty() && dense_sum > 1.0e-30F) {
-            for (auto & value : ranked) value.learned_weight /= dense_sum;
+            for (auto &value : ranked) value.learned_weight /= dense_sum;
         }
         if (trace != nullptr) {
             for (const auto value : ranked)
@@ -686,11 +700,11 @@ skin integrate(
         }
         const auto keep = std::min<std::size_t>(4U, ranked.size());
         std::partial_sort(ranked.begin(), ranked.begin() + static_cast<std::ptrdiff_t>(keep), ranked.end(),
-            [](const auto & left, const auto & right) {
-                if (left.learned_weight != right.learned_weight)
-                    return left.learned_weight > right.learned_weight;
-                return left.joint < right.joint;
-            });
+            [](const auto &left, const auto &right) {
+            if (left.learned_weight != right.learned_weight)
+                return left.learned_weight > right.learned_weight;
+            return left.joint < right.joint;
+        });
         float sum = 0.0F;
         for (std::size_t slot = 0; slot < 4U; ++slot) {
             const auto value = slot < keep ? ranked[slot] : binding_candidate{0.0F, 0U};
@@ -702,7 +716,7 @@ skin integrate(
             output.weights[vertex][0] = 1.0F;
             sum = 1.0F;
         }
-        for (auto & value : output.weights[vertex]) value /= sum;
+        for (auto &value : output.weights[vertex]) value /= sum;
     }
     return output;
 }
@@ -710,13 +724,13 @@ skin integrate(
 // ---- Robust weight transfer -------------------------------------------------
 
 // Same order as integrate(): greatest learned weight first, lower joint on ties.
-void keep_four(const float * row, std::size_t joint_count,
-               std::array<std::uint16_t, 4> & joints, std::array<float, 4> & weights) {
+void keep_four(const float *row, std::size_t joint_count,
+    std::array<std::uint16_t, 4> &joints, std::array<float, 4> &weights) {
     std::array<std::pair<float, std::uint16_t>, 4> best{};
-    for (auto & entry : best) entry = {-1.0F, 0U};
+    for (auto &entry : best) entry = {-1.0F, 0U};
     for (std::size_t joint = 0; joint < joint_count; ++joint) {
         const std::pair<float, std::uint16_t> candidate{row[joint], static_cast<std::uint16_t>(joint)};
-        const auto better = [](const auto & left, const auto & right) {
+        const auto better = [](const auto &left, const auto &right) {
             return left.first != right.first ? left.first > right.first : left.second < right.second;
         };
         if (!better(candidate, best.back())) continue;
@@ -735,13 +749,13 @@ void keep_four(const float * row, std::size_t joint_count,
         weights = {1.0F, 0.0F, 0.0F, 0.0F};
         return;
     }
-    for (auto & value : weights) value /= sum;
+    for (auto &value : weights) value /= sum;
 }
 
 } // namespace
 
 skin integrate_robust_binding(
-    const skeleton & target,
+    const skeleton &target,
     std::span<const vec3> normalized_vertices,
     std::span<const vec3> vertex_normals,
     std::span<const triangle> faces,
@@ -749,7 +763,7 @@ skin integrate_robust_binding(
     std::span<const vec3> sampled_normals,
     std::span<const std::uint32_t> sampled_faces,
     std::span<const std::vector<float>> dense_joint_weights,
-    const robust_transfer_options & options) {
+    const robust_transfer_options &options) {
     const std::size_t n = normalized_vertices.size();
     const std::size_t joint_count = dense_joint_weights.size();
     skin output;
@@ -770,8 +784,8 @@ skin integrate_robust_binding(
     const double weld = diagonal * 1.0e-6;
     const auto cell_of = [&](vec3 p) {
         return grid_cell{static_cast<std::int64_t>(std::floor(p.x / weld)),
-                         static_cast<std::int64_t>(std::floor(p.y / weld)),
-                         static_cast<std::int64_t>(std::floor(p.z / weld))};
+            static_cast<std::int64_t>(std::floor(p.y / weld)),
+            static_cast<std::int64_t>(std::floor(p.z / weld))};
     };
     std::unordered_map<grid_cell, std::vector<std::uint32_t>, grid_cell_hash> cells;
     cells.reserve(n);
@@ -788,7 +802,10 @@ skin integrate_robust_binding(
                     const auto it = cells.find({home.x + x, home.y + y, home.z + z});
                     if (it == cells.end()) continue;
                     for (const auto candidate : it->second)
-                        if (static_cast<double>(distance(position[candidate], p)) <= weld) { found = candidate; break; }
+                        if (static_cast<double>(distance(position[candidate], p)) <= weld) {
+                            found = candidate;
+                            break;
+                        }
                 }
         if (found == std::numeric_limits<std::uint32_t>::max()) {
             found = static_cast<std::uint32_t>(position.size());
@@ -799,7 +816,9 @@ skin integrate_robust_binding(
         welded_of[vertex] = found;
         if (vertex < vertex_normals.size()) {
             const auto normal = vertex_normals[vertex];
-            normal_sum[found].x += normal.x; normal_sum[found].y += normal.y; normal_sum[found].z += normal.z;
+            normal_sum[found].x += normal.x;
+            normal_sum[found].y += normal.y;
+            normal_sum[found].z += normal.z;
         }
     }
     const std::size_t count = position.size();
@@ -809,7 +828,7 @@ skin integrate_robust_binding(
     std::vector<std::int32_t> welded_face_of(faces.size(), -1);
     std::vector<std::vector<std::uint32_t>> faces_at(count);
     for (std::size_t index = 0; index < faces.size(); ++index) {
-        const auto & face = faces[index];
+        const auto &face = faces[index];
         if (face[0] >= n || face[1] >= n || face[2] >= n) continue;
         const std::array<std::uint32_t, 3> value{welded_of[face[0]], welded_of[face[1]], welded_of[face[2]]};
         if (value[0] == value[1] || value[1] == value[2] || value[2] == value[0]) continue;
@@ -819,12 +838,12 @@ skin integrate_robust_binding(
     }
     // One-ring adjacency of the welded mesh.
     std::vector<std::vector<std::uint32_t>> ring(count);
-    for (const auto & face : welded_faces)
+    for (const auto &face : welded_faces)
         for (std::size_t k = 0; k < 3U; ++k) {
             ring[face[k]].push_back(face[(k + 1U) % 3U]);
             ring[face[k]].push_back(face[(k + 2U) % 3U]);
         }
-    for (auto & list : ring) {
+    for (auto &list : ring) {
         std::sort(list.begin(), list.end());
         list.erase(std::unique(list.begin(), list.end()), list.end());
     }
@@ -832,8 +851,7 @@ skin integrate_robust_binding(
     for (std::size_t vertex = 0; vertex < count; ++vertex) {
         const auto value = normal_sum[vertex];
         const double magnitude = std::sqrt(dot(value, value));
-        normal[vertex] = magnitude > 1.0e-12 ? dvec3{value.x / magnitude, value.y / magnitude, value.z / magnitude}
-                                             : dvec3{0.0, 0.0, 0.0};
+        normal[vertex] = magnitude > 1.0e-12 ? dvec3{value.x / magnitude, value.y / magnitude, value.z / magnitude} : dvec3{0.0, 0.0, 0.0};
     }
     // A sample is on the vertex's own surface when the surface path to it is
     // not much longer than the straight line: geodesic <= ratio * euclidean +
@@ -898,10 +916,10 @@ skin integrate_robust_binding(
     // turns 45 degrees away from both sides of a hard edge and would reject
     // every sample on a low-poly or hard-surface model.
     std::vector<std::vector<dvec3>> incident(count);
-    for (const auto & f : welded_faces) {
+    for (const auto &f : welded_faces) {
         const auto a = position[f[0]], b = position[f[1]], c = position[f[2]];
         const dvec3 value = cross({static_cast<double>(b.x - a.x), static_cast<double>(b.y - a.y), static_cast<double>(b.z - a.z)},
-                                  {static_cast<double>(c.x - a.x), static_cast<double>(c.y - a.y), static_cast<double>(c.z - a.z)});
+            {static_cast<double>(c.x - a.x), static_cast<double>(c.y - a.y), static_cast<double>(c.z - a.z)});
         const double magnitude = std::sqrt(dot(value, value));
         if (!(magnitude > 0.0)) continue;
         const dvec3 unit{value.x / magnitude, value.y / magnitude, value.z / magnitude};
@@ -910,12 +928,12 @@ skin integrate_robust_binding(
     const auto faces_toward = [&](std::size_t vertex, vec3 s, double limit) {
         if (incident[vertex].empty())
             return normal[vertex].x * s.x + normal[vertex].y * s.y + normal[vertex].z * s.z >= limit;
-        for (const auto & f : incident[vertex])
+        for (const auto &f : incident[vertex])
             if (f.x * s.x + f.y * s.y + f.z * s.z >= limit) return true;
         return false;
     };
     std::vector<char> known(count, 0);
-    const auto interpolate = [&](std::span<const std::pair<float, std::uint32_t>> picks, float * row) {
+    const auto interpolate = [&](std::span<const std::pair<float, std::uint32_t>> picks, float *row) {
         double total = 0.0;
         std::array<double, 64> inverse{};
         const std::size_t used = std::min<std::size_t>(picks.size(), inverse.size());
@@ -931,16 +949,16 @@ skin integrate_robust_binding(
         }
     };
     for (std::size_t vertex = 0; vertex < count; ++vertex) {
-        const auto & candidates = found[vertex];
+        const auto &candidates = found[vertex];
         interpolate(std::span{candidates.data(), std::min(options.interpolated, candidates.size())},
-                    raw.data() + vertex * joint_count);
+            raw.data() + vertex * joint_count);
         double farthest = 0.0;
-        for (const auto & entry : candidates)
+        for (const auto &entry : candidates)
             if (static_cast<double>(entry.first) <= reach * reach) farthest = std::sqrt(static_cast<double>(entry.first));
         walk(static_cast<std::uint32_t>(vertex),
-             static_cast<double>(options.geodesic_ratio) * farthest + 0.5 * edge_mean[vertex]);
+            static_cast<double>(options.geodesic_ratio) * farthest + 0.5 * edge_mean[vertex]);
         std::vector<std::pair<float, std::uint32_t>> accepted;
-        for (const auto & entry : candidates) {
+        for (const auto &entry : candidates) {
             if (accepted.size() >= options.interpolated) break;
             if (static_cast<double>(entry.first) > reach * reach) break;
             if (entry.second >= sampled_normals.size() ||
@@ -981,23 +999,23 @@ skin integrate_robust_binding(
     std::vector<std::array<double, 3>> lengths(welded_faces.size());
     double length_sum = 0.0;
     for (std::size_t face = 0; face < welded_faces.size(); ++face) {
-        const auto & f = welded_faces[face];
+        const auto &f = welded_faces[face];
         for (std::size_t k = 0; k < 3U; ++k) {
             lengths[face][k] = static_cast<double>(distance(position[f[(k + 1U) % 3U]], position[f[(k + 2U) % 3U]]));
             length_sum += lengths[face][k];
         }
     }
     const double epsilon = welded_faces.empty() ? 0.0 :
-        1.0e-5 * length_sum / static_cast<double>(welded_faces.size() * 3U);
+                                                  1.0e-5 * length_sum / static_cast<double>(welded_faces.size() * 3U);
     double delta = 0.0;
-    for (const auto & l : lengths)
+    for (const auto &l : lengths)
         for (std::size_t k = 0; k < 3U; ++k)
             delta = std::max(delta, epsilon - (l[(k + 1U) % 3U] + l[(k + 2U) % 3U] - l[k]));
     std::vector<double> mass(count, 0.0);
     std::unordered_map<std::uint64_t, double> cotangent;
     cotangent.reserve(welded_faces.size() * 3U);
     for (std::size_t face = 0; face < welded_faces.size(); ++face) {
-        const auto & f = welded_faces[face];
+        const auto &f = welded_faces[face];
         const double a = lengths[face][0] + delta, b = lengths[face][1] + delta, c = lengths[face][2] + delta;
         const double product = (a + b + c) * (-a + b + c) * (a - b + c) * (a + b - c);
         const double area = 0.25 * std::sqrt(std::max(product, 0.0));
@@ -1015,7 +1033,7 @@ skin integrate_robust_binding(
     }
     std::vector<std::vector<std::pair<std::uint32_t, double>>> laplacian(count);
     std::vector<double> diagonal_entry(count, 0.0);
-    for (const auto & [key, weight] : cotangent) {
+    for (const auto &[key, weight] : cotangent) {
         const auto i = static_cast<std::uint32_t>(key >> 32U);
         const auto j = static_cast<std::uint32_t>(key & 0xffffffffU);
         laplacian[i].emplace_back(j, weight);
@@ -1040,10 +1058,16 @@ skin integrate_robust_binding(
                 const auto vertex = stack.back();
                 stack.pop_back();
                 island.push_back(vertex);
-                for (const auto & [other, weight] : laplacian[vertex]) {
+                for (const auto &[other, weight] : laplacian[vertex]) {
                     (void) weight;
-                    if (known[other]) { anchored = true; continue; }
-                    if (!seen[other]) { seen[other] = 1; stack.push_back(other); }
+                    if (known[other]) {
+                        anchored = true;
+                        continue;
+                    }
+                    if (!seen[other]) {
+                        seen[other] = 1;
+                        stack.push_back(other);
+                    }
                 }
             }
             bool solvable = anchored;
@@ -1082,11 +1106,11 @@ skin integrate_robust_binding(
                 row.emplace_back(j, -l_ij);
                 const double inverse_mass = mass[j] > 0.0 ? 1.0 / mass[j] : 0.0;
                 row.emplace_back(j, l_ij * diagonal_entry[j] * inverse_mass);
-                for (const auto & [k, l_jk] : laplacian[j]) row.emplace_back(k, l_ij * l_jk * inverse_mass);
+                for (const auto &[k, l_jk] : laplacian[j]) row.emplace_back(k, l_ij * l_jk * inverse_mass);
             };
             visit(i, diagonal_entry[i]);
-            for (const auto & [j, l_ij] : laplacian[i]) visit(j, l_ij);
-            std::sort(row.begin(), row.end(), [](const auto & x, const auto & y) { return x.first < y.first; });
+            for (const auto &[j, l_ij] : laplacian[i]) visit(j, l_ij);
+            std::sort(row.begin(), row.end(), [](const auto &x, const auto &y) { return x.first < y.first; });
             for (std::size_t index = 0; index < row.size();) {
                 const auto column = row[index].first;
                 double value = 0.0;
@@ -1102,7 +1126,7 @@ skin integrate_robust_binding(
             }
             row_start[r + 1U] = a_column.size();
         }
-        const auto multiply = [&](const std::vector<double> & x, std::vector<double> & y) {
+        const auto multiply = [&](const std::vector<double> &x, std::vector<double> &y) {
             for (std::size_t r = 0; r < u; ++r) {
                 double value = 0.0;
                 for (std::size_t e = row_start[r]; e < row_start[r + 1U]; ++e) value += a_value[e] * x[a_column[e]];
@@ -1114,7 +1138,7 @@ skin integrate_robust_binding(
             double b_norm = 0.0;
             for (std::size_t r = 0; r < u; ++r) {
                 double value = 0.0;
-                for (const auto & [column, q] : b_rows[r])
+                for (const auto &[column, q] : b_rows[r])
                     value -= q * static_cast<double>(robust[column * joint_count + joint]);
                 b[r] = value;
                 b_norm += value * value;
@@ -1169,7 +1193,7 @@ skin integrate_robust_binding(
 
     // 5. Clamp, normalise, keep four; seam twins share their welded row.
     for (std::size_t vertex = 0; vertex < count; ++vertex) {
-        float * values = robust.data() + vertex * joint_count;
+        float *values = robust.data() + vertex * joint_count;
         double sum = 0.0;
         for (std::size_t joint = 0; joint < joint_count; ++joint) {
             values[joint] = std::isfinite(values[joint]) ? std::clamp(values[joint], 0.0F, 1.0F) : 0.0F;
@@ -1192,9 +1216,12 @@ skin integrate_robust_binding(
         std::vector<float> next(robust.size());
         for (std::size_t pass = 0; pass < options.smooth_iterations; ++pass) {
             for (std::size_t vertex = 0; vertex < count; ++vertex) {
-                const float * self = robust.data() + vertex * joint_count;
-                float * out = next.data() + vertex * joint_count;
-                if (ring[vertex].empty()) { std::copy_n(self, joint_count, out); continue; }
+                const float *self = robust.data() + vertex * joint_count;
+                float *out = next.data() + vertex * joint_count;
+                if (ring[vertex].empty()) {
+                    std::copy_n(self, joint_count, out);
+                    continue;
+                }
                 const float k = 1.0F / static_cast<float>(ring[vertex].size());
                 for (std::size_t joint = 0; joint < joint_count; ++joint) {
                     float mean = 0.0F;
@@ -1237,7 +1264,10 @@ skin integrate_robust_binding(
                 stack.pop_back();
                 part.push_back(at);
                 for (const auto next : ring[at])
-                    if (!seen[next]) { seen[next] = 1; stack.push_back(next); }
+                    if (!seen[next]) {
+                        seen[next] = 1;
+                        stack.push_back(next);
+                    }
             }
             std::fill(share.begin(), share.end(), 0.0);
             double total = 0.0;
@@ -1275,9 +1305,10 @@ skin integrate_robust_binding(
             if (!dropped) continue;
             ++output.transfer.trimmed_parts;
             for (const auto v : part) {
-                float * values = robust.data() + v * joint_count;
+                float *values = robust.data() + v * joint_count;
                 double kept = 0.0;
-                for (std::size_t joint = 0; joint < joint_count; ++joint) if (keep[joint]) kept += values[joint];
+                for (std::size_t joint = 0; joint < joint_count; ++joint)
+                    if (keep[joint]) kept += values[joint];
                 if (!(kept > 1.0e-6)) continue;
                 for (std::size_t joint = 0; joint < joint_count; ++joint)
                     values[joint] = keep[joint] ? static_cast<float>(values[joint] / kept) : 0.0F;
@@ -1287,19 +1318,19 @@ skin integrate_robust_binding(
 
     for (std::size_t vertex = 0; vertex < n; ++vertex)
         keep_four(robust.data() + static_cast<std::size_t>(welded_of[vertex]) * joint_count, joint_count,
-                  output.joints[vertex], output.weights[vertex]);
+            output.joints[vertex], output.weights[vertex]);
     return output;
 }
 
-std::function<void(const transfer_inputs &)> & transfer_capture() {
+std::function<void(const transfer_inputs &)> &transfer_capture() {
     static std::function<void(const transfer_inputs &)> value;
     return value;
 }
 
-std::vector<std::byte> serialize_transfer_inputs(const transfer_inputs & value) {
+std::vector<std::byte> serialize_transfer_inputs(const transfer_inputs &value) {
     std::vector<std::byte> out;
-    const auto put = [&](const void * data, std::size_t bytes) {
-        const auto * first = static_cast<const std::byte *>(data);
+    const auto put = [&](const void *data, std::size_t bytes) {
+        const auto *first = static_cast<const std::byte *>(data);
         out.insert(out.end(), first, first + bytes);
     };
     const auto put_u32 = [&](std::size_t v) { const auto x = static_cast<std::uint32_t>(v); put(&x, 4U); };
@@ -1315,13 +1346,13 @@ std::vector<std::byte> serialize_transfer_inputs(const transfer_inputs & value) 
     put(value.sampled_points.data(), value.sampled_points.size_bytes());
     put(value.sampled_normals.data(), value.sampled_normals.size_bytes());
     put(value.sampled_faces.data(), value.sampled_faces.size_bytes());
-    for (const auto & column : value.dense_joint_weights) put(column.data(), column.size() * sizeof(float));
+    for (const auto &column : value.dense_joint_weights) put(column.data(), column.size() * sizeof(float));
     return out;
 }
 
-bool deserialize_transfer_inputs(std::span<const std::byte> bytes, transfer_inputs_storage & out) {
+bool deserialize_transfer_inputs(std::span<const std::byte> bytes, transfer_inputs_storage &out) {
     std::size_t at = 0U;
-    const auto take = [&](void * data, std::size_t size) {
+    const auto take = [&](void *data, std::size_t size) {
         if (at + size > bytes.size()) return false;
         std::memcpy(data, bytes.data() + at, size);
         at += size;
@@ -1331,50 +1362,54 @@ bool deserialize_transfer_inputs(std::span<const std::byte> bytes, transfer_inpu
     std::uint32_t version = 0, n = 0, f = 0, s = 0, j = 0;
     if (!take(magic, 4U) || std::memcmp(magic, "STKT", 4U) != 0) return false;
     if (!take(&version, 4U) || version != 1U || !take(&n, 4U) || !take(&f, 4U) || !take(&s, 4U) || !take(&j, 4U)) return false;
-    out.normalized_vertices.resize(n); out.vertex_normals.resize(n); out.faces.resize(f);
-    out.sampled_points.resize(s); out.sampled_normals.resize(s); out.sampled_faces.resize(s);
+    out.normalized_vertices.resize(n);
+    out.vertex_normals.resize(n);
+    out.faces.resize(f);
+    out.sampled_points.resize(s);
+    out.sampled_normals.resize(s);
+    out.sampled_faces.resize(s);
     out.dense_joint_weights.assign(j, std::vector<float>(s));
     bool ok = take(out.normalized_vertices.data(), n * sizeof(vec3)) && take(out.vertex_normals.data(), n * sizeof(vec3)) &&
-              take(out.faces.data(), f * sizeof(triangle)) && take(out.sampled_points.data(), s * sizeof(vec3)) &&
-              take(out.sampled_normals.data(), s * sizeof(vec3)) && take(out.sampled_faces.data(), s * sizeof(std::uint32_t));
-    for (auto & column : out.dense_joint_weights) ok = ok && take(column.data(), s * sizeof(float));
+        take(out.faces.data(), f * sizeof(triangle)) && take(out.sampled_points.data(), s * sizeof(vec3)) &&
+        take(out.sampled_normals.data(), s * sizeof(vec3)) && take(out.sampled_faces.data(), s * sizeof(std::uint32_t));
+    for (auto &column : out.dense_joint_weights) ok = ok && take(column.data(), s * sizeof(float));
     return ok && at == bytes.size();
 }
 
 skin integrate_learned_binding(
-    const skeleton & target,
+    const skeleton &target,
     std::span<const vec3> normalized_vertices,
     std::span<const vec3> sampled_points,
     std::span<const std::vector<float>> dense_joint_weights,
-    binding_trace * trace) {
+    binding_trace *trace) {
     return integrate(target, normalized_vertices, sampled_points, dense_joint_weights, {}, trace);
 }
 
 skin integrate_postprocessed_binding(
-    const skeleton & target,
+    const skeleton &target,
     std::span<const vec3> normalized_vertices,
     std::span<const triangle> faces,
     std::span<const vec3> normalized_joints,
     std::span<const vec3> sampled_points,
     std::span<const std::vector<float>> dense_joint_weights,
-    binding_trace * trace) {
+    binding_trace *trace) {
     const auto locality = surface_weights(normalized_vertices, faces, normalized_joints);
-    auto output=integrate(target, normalized_vertices, sampled_points, dense_joint_weights, locality.weights, trace);
+    auto output = integrate(target, normalized_vertices, sampled_points, dense_joint_weights, locality.weights, trace);
     if (trace != nullptr) {
-        trace->voxel_coordinates=locality.voxel_coordinates;
-        trace->surface_seeds=locality.seeds;
-        trace->surface_distances=locality.distances;
-        trace->surface_graph_edges=locality.graph_edges;
-        trace->maximum_surface_distance=locality.maximum_distance;
-        trace->surface_graph_sources=locality.graph_sources;
-        trace->surface_graph_targets=locality.graph_targets;
-        trace->surface_graph_weights=locality.graph_weights;
+        trace->voxel_coordinates = locality.voxel_coordinates;
+        trace->surface_seeds = locality.seeds;
+        trace->surface_distances = locality.distances;
+        trace->surface_graph_edges = locality.graph_edges;
+        trace->maximum_surface_distance = locality.maximum_distance;
+        trace->surface_graph_sources = locality.graph_sources;
+        trace->surface_graph_targets = locality.graph_targets;
+        trace->surface_graph_weights = locality.graph_weights;
     }
     return output;
 }
 
 skin integrate_postprocessed_binding_precise(
-    const skeleton & target,
+    const skeleton &target,
     std::span<const vec3> normalized_vertices,
     std::span<const precise_vec3> precise_vertices,
     std::span<const triangle> faces,
@@ -1382,19 +1417,19 @@ skin integrate_postprocessed_binding_precise(
     std::span<const precise_vec3> precise_joints,
     std::span<const vec3> sampled_points,
     std::span<const std::vector<float>> dense_joint_weights,
-    binding_trace * trace) {
+    binding_trace *trace) {
     const auto locality = surface_weights(
         normalized_vertices, faces, normalized_joints, precise_vertices, precise_joints);
-    auto output=integrate(target, normalized_vertices, sampled_points, dense_joint_weights, locality.weights, trace);
+    auto output = integrate(target, normalized_vertices, sampled_points, dense_joint_weights, locality.weights, trace);
     if (trace != nullptr) {
-        trace->voxel_coordinates=locality.voxel_coordinates;
-        trace->surface_seeds=locality.seeds;
-        trace->surface_distances=locality.distances;
-        trace->surface_graph_edges=locality.graph_edges;
-        trace->maximum_surface_distance=locality.maximum_distance;
-        trace->surface_graph_sources=locality.graph_sources;
-        trace->surface_graph_targets=locality.graph_targets;
-        trace->surface_graph_weights=locality.graph_weights;
+        trace->voxel_coordinates = locality.voxel_coordinates;
+        trace->surface_seeds = locality.seeds;
+        trace->surface_distances = locality.distances;
+        trace->surface_graph_edges = locality.graph_edges;
+        trace->maximum_surface_distance = locality.maximum_distance;
+        trace->surface_graph_sources = locality.graph_sources;
+        trace->surface_graph_targets = locality.graph_targets;
+        trace->surface_graph_weights = locality.graph_weights;
     }
     return output;
 }

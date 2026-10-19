@@ -10,7 +10,9 @@
 
 namespace skintokens::detail {
 
-struct precise_vec3 { double x, y, z; };
+struct precise_vec3 {
+    double x, y, z;
+};
 
 struct binding_trace {
     std::vector<std::uint32_t> neighbor_indices;
@@ -34,11 +36,11 @@ struct binding_trace {
 // points, then the greatest four learned joint weights are retained and
 // normalized. This intentionally contains no geometric bone-distance gate.
 skin integrate_learned_binding(
-    const skeleton & target,
+    const skeleton &target,
     std::span<const vec3> normalized_vertices,
     std::span<const vec3> sampled_points,
     std::span<const std::vector<float>> dense_joint_weights,
-    binding_trace * trace = nullptr);
+    binding_trace *trace = nullptr);
 
 // Reproduce the optional postprocess used by the upstream demo: learned
 // weights remain the signal, but are multiplied by a normalized surface-
@@ -46,16 +48,16 @@ skin integrate_learned_binding(
 // upstream call does not pass parents to voxel_skin, so joints (rather than
 // subdivided bones) seed the mesh graph.
 skin integrate_postprocessed_binding(
-    const skeleton & target,
+    const skeleton &target,
     std::span<const vec3> normalized_vertices,
     std::span<const triangle> faces,
     std::span<const vec3> normalized_joints,
     std::span<const vec3> sampled_points,
     std::span<const std::vector<float>> dense_joint_weights,
-    binding_trace * trace = nullptr);
+    binding_trace *trace = nullptr);
 
 skin integrate_postprocessed_binding_precise(
-    const skeleton & target,
+    const skeleton &target,
     std::span<const vec3> normalized_vertices,
     std::span<const precise_vec3> precise_vertices,
     std::span<const triangle> faces,
@@ -63,7 +65,7 @@ skin integrate_postprocessed_binding_precise(
     std::span<const precise_vec3> precise_joints,
     std::span<const vec3> sampled_points,
     std::span<const std::vector<float>> dense_joint_weights,
-    binding_trace * trace = nullptr);
+    binding_trace *trace = nullptr);
 
 struct robust_transfer_options {
     // A sample further than this fraction of the bounding-box diagonal is
@@ -110,7 +112,7 @@ struct robust_transfer_options {
 //      far apart in the skeleton was tried and dropped: on a connected mesh the
 //      cut is a weight discontinuity that tears under motion.)
 skin integrate_robust_binding(
-    const skeleton & target,
+    const skeleton &target,
     std::span<const vec3> normalized_vertices,
     std::span<const vec3> vertex_normals,
     std::span<const triangle> faces,
@@ -118,7 +120,7 @@ skin integrate_robust_binding(
     std::span<const vec3> sampled_normals,
     std::span<const std::uint32_t> sampled_faces,
     std::span<const std::vector<float>> dense_joint_weights,
-    const robust_transfer_options & options = {});
+    const robust_transfer_options &options = {});
 
 // Everything the point-cloud-to-vertex transfer reads, so a transfer change
 // can be replayed and measured without rerunning the model. Serialised as
@@ -135,16 +137,16 @@ struct transfer_inputs {
     std::span<const std::uint32_t> sampled_faces;
     std::span<const std::vector<float>> dense_joint_weights;
 };
-std::vector<std::byte> serialize_transfer_inputs(const transfer_inputs & value);
+std::vector<std::byte> serialize_transfer_inputs(const transfer_inputs &value);
 struct transfer_inputs_storage {
     std::vector<vec3> normalized_vertices, vertex_normals, sampled_points, sampled_normals;
     std::vector<triangle> faces;
     std::vector<std::uint32_t> sampled_faces;
     std::vector<std::vector<float>> dense_joint_weights;
 };
-bool deserialize_transfer_inputs(std::span<const std::byte> bytes, transfer_inputs_storage & out);
+bool deserialize_transfer_inputs(std::span<const std::byte> bytes, transfer_inputs_storage &out);
 // When set, decode_binding hands its transfer inputs here before the
 // transfer (the guest's trace=1 option; the CLI's SKINTOKENS_DUMP_TRANSFER).
-std::function<void(const transfer_inputs &)> & transfer_capture();
+std::function<void(const transfer_inputs &)> &transfer_capture();
 
 } // namespace skintokens::detail
