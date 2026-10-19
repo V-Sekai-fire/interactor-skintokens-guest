@@ -907,6 +907,26 @@ std::string canonical_joint_name(std::string_view name) {
     return output;
 }
 
+// Every skin's joints, in first-seen order. Godot and VRM exporters often write one skin per
+// mesh over the same skeleton (each with its own subset of joints); the skeleton is their union.
+result<std::vector<std::size_t>> skin_joint_union(const json &root, std::size_t node_count) {
+    std::vector<std::size_t> joints;
+    std::vector<bool> seen(node_count, false);
+    for (const auto &skin : root.value("skins", json::array())) {
+        if (!skin.is_object() || !skin.contains("joints") || !skin["joints"].is_array())
+            return std::unexpected(detail::fail(error_code::invalid_format, "glTF skin has no joint array"));
+        for (const auto &value : skin["joints"]) {
+            if (!value.is_number_unsigned() || value.get<std::size_t>() >= node_count)
+                return std::unexpected(detail::fail(error_code::invalid_format, "skin joint node is invalid"));
+            const auto node = value.get<std::size_t>();
+            if (seen[node]) continue;
+            seen[node] = true;
+            joints.push_back(node);
+        }
+    }
+    return joints;
+}
+
 result<motion> load_skeleton_document(const document &doc, bool require_animation) {
     auto nodes = doc.root.find("nodes");
     auto animations = doc.root.find("animations");
@@ -928,14 +948,9 @@ result<motion> load_skeleton_document(const document &doc, bool require_animatio
     std::vector<std::size_t> joint_nodes;
     const auto skins = doc.root.find("skins");
     if (skins != doc.root.end() && skins->is_array() && !skins->empty()) {
-        if (!(*skins)[0].is_object() || !(*skins)[0].contains("joints") ||
-            !(*skins)[0]["joints"].is_array())
-            return std::unexpected(detail::fail(error_code::invalid_format, "glTF skin has no joint array"));
-        for (const auto &value : (*skins)[0]["joints"]) {
-            if (!value.is_number_unsigned() || value.get<std::size_t>() >= nodes->size())
-                return std::unexpected(detail::fail(error_code::invalid_format, "skin joint node is invalid"));
-            joint_nodes.push_back(value.get<std::size_t>());
-        }
+        auto joints = skin_joint_union(doc.root, nodes->size());
+        if (!joints) return std::unexpected(joints.error());
+        joint_nodes = std::move(*joints);
     } else {
         joint_nodes.resize(nodes->size());
         std::iota(joint_nodes.begin(), joint_nodes.end(), 0U);
@@ -1196,6 +1211,12 @@ rig_kind identify_rig(const skeleton &value) {
 
 result<motion> load_skeleton_glb_file(const std::filesystem::path &path) {
     auto doc = read_document(path);
+    if (!doc) return std::unexpected(doc.error());
+    return load_skeleton_document(*doc, false);
+}
+
+result<motion> load_skeleton_glb_memory(std::span<const std::byte> bytes) {
+    auto doc = parse_document(bytes);
     if (!doc) return std::unexpected(doc.error());
     return load_skeleton_document(*doc, false);
 }
@@ -2085,21 +2106,24 @@ result<std::vector<std::byte>> add_animation_glb_memory(
     builder.root = doc->root;
     builder.binary = doc->binary;
     json &root = builder.root;
-    if (!root.contains("skins") || !root["skins"].is_array() || root["skins"].size() != 1U ||
-        !root["skins"][0].contains("joints") || !root.contains("buffers") || root["buffers"].empty() ||
-        root["buffers"][0].contains("uri"))
-        return std::unexpected(detail::fail(error_code::invalid_format, "rigged GLB must hold one skin and a binary chunk"));
+    if (!root.contains("skins") || !root["skins"].is_array() || root["skins"].empty() ||
+        !root.contains("nodes") || !root["nodes"].is_array() || !root.contains("buffers") ||
+        root["buffers"].empty() || root["buffers"][0].contains("uri"))
+        return std::unexpected(detail::fail(error_code::invalid_format, "rigged GLB must hold a skin and a binary chunk"));
+    // The skeleton is every skin's joints together (one skin per mesh is common).
+    auto skin_joints = skin_joint_union(root, root["nodes"].size());
+    if (!skin_joints) return std::unexpected(skin_joints.error());
     const std::size_t joint_count = animation.rig.names.size();
     if (animation.frames == 0U || animation.root_translations.size() != animation.frames ||
         animation.local_rotations.size() != animation.frames * joint_count ||
-        root["skins"][0]["joints"].size() != joint_count)
+        skin_joints->size() != joint_count)
         return std::unexpected(detail::fail(error_code::invalid_argument, "animation does not match the skin skeleton"));
     // The clip's joints are the skin's, found by name (the skeleton loader names them the same way).
     std::vector<std::size_t> targets(joint_count);
     for (std::size_t joint = 0; joint < joint_count; ++joint) {
         std::size_t found = no_node;
         for (std::size_t slot = 0; slot < joint_count; ++slot) {
-            const std::size_t node = root["skins"][0]["joints"][slot].get<std::size_t>();
+            const std::size_t node = (*skin_joints)[slot];
             if (root["nodes"][node].value("name", "joint_" + std::to_string(slot)) != animation.rig.names[joint]) continue;
             if (found != no_node)
                 return std::unexpected(detail::fail(error_code::invalid_format, "skin joint names are not unique"));

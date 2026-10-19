@@ -266,11 +266,13 @@ result<std::pair<std::vector<std::byte>, humanoid_match_report>> add_soma30_moti
     const retarget_options &options) {
     if (identify_rig(soma30.rig) != rig_kind::soma30)
         return std::unexpected(detail::fail(error_code::invalid_argument, "motion is not a SOMA30 clip"));
-    auto asset = load_skinned_glb_memory(rigged);
-    if (!asset) return std::unexpected(asset.error());
-    auto mapping = match_generated_humanoid(asset->binding.rig, match_options);
+    // Only the skeleton matters here (every skin's joints), not the weights: a VRM often holds one
+    // skin per mesh.
+    auto skeleton = load_skeleton_glb_memory(rigged);
+    if (!skeleton) return std::unexpected(skeleton.error());
+    auto mapping = match_generated_humanoid(skeleton->rig, match_options);
     if (!mapping) return std::unexpected(mapping.error());
-    auto animation = retarget_soma30_motion_to_generated(soma30, asset->binding.rig, *mapping, options);
+    auto animation = retarget_soma30_motion_to_generated(soma30, skeleton->rig, *mapping, options);
     if (!animation) return std::unexpected(animation.error());
     animation->name = soma30.name;
     auto bytes = add_animation_glb_memory(rigged, *animation);
