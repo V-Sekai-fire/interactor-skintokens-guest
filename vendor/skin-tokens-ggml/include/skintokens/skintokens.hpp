@@ -493,8 +493,11 @@ compare_soma30_to_generated(
 //         steady part whose last frame best meets its first (joint angles, root height and
 //         velocity), its last frames cross-faded into the frames before it, the root's ground
 //         travel removed, and frame 0 repeated at the end so a player wraps over one frame.
-//   once: the action, from just before the motion rises above 15% of its peak to just after it
-//         falls below, plus six settle frames each side.
+//   once: the action, from six frames before the motion rises above 15% of its peak to the frame
+//         after it whose pose comes back closest to the start, its last frames faded into the
+//         start pose, the root brought back, and frame 0 repeated at the end, so it also loops.
+//         seam_before_max_degrees is how far that frame still is from the start: a clip that
+//         ends in another posture (sitting down) cannot loop without a visible blend.
 enum class clip_cut : std::uint8_t { loop,
     once };
 struct clip_cut_report {
