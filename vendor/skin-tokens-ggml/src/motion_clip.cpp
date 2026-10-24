@@ -271,6 +271,21 @@ result<std::pair<std::vector<std::byte>, humanoid_match_report>> add_soma30_moti
     auto skeleton = load_skeleton_glb_memory(rigged);
     if (!skeleton) return std::unexpected(skeleton.error());
     auto mapping = match_generated_humanoid(skeleton->rig, match_options);
+    if (!mapping) {
+        // An authored character (a root above the hips, skirt or hair bones on the hips, one skin
+        // per part) fails the generated-rig shape test; its VRM 1.0 Humanoid roles
+        // (KHR_character_skeleton_mapping vrm1_humanoid, or VRMC_vrm) name the joints by node.
+        // Generated rigs that pass keep the generated mapping, so their output does not change.
+        auto roles = vrm1_humanoid_roles_glb_memory(rigged);
+        if (!roles) return std::unexpected(roles.error());
+        if (!roles->empty()) {
+            auto from_vrm = match_vrm1_humanoid(skeleton->rig, *roles);
+            if (!from_vrm)
+                return std::unexpected(detail::fail(error_code::invalid_argument,
+                    mapping.error().message + "; VRM 1.0 humanoid: " + from_vrm.error().message));
+            mapping = std::move(from_vrm);
+        }
+    }
     if (!mapping) return std::unexpected(mapping.error());
     auto animation = retarget_soma30_motion_to_generated(soma30, skeleton->rig, *mapping, options);
     if (!animation) return std::unexpected(animation.error());
