@@ -506,6 +506,11 @@ compare_soma30_to_generated(
     std::span<const std::byte> rigged,
     const motion &animation);
 
+// Adds every clip in one pass (each on the same skeleton): the file is parsed and written once.
+[[nodiscard]] SKINTOKENS_API result<std::vector<std::byte>> add_animations_glb_memory(
+    std::span<const std::byte> rigged,
+    std::span<const motion> animations);
+
 // A SOMA30 clip in motion.elf's layout (interactor-motion-guest motion_result): per frame, per
 // joint, the parent-local row-major 3x3 (column vectors) then the translation; the root's
 // translation is its position, the others their rest offset. Rest = T-pose (identity rotations).
@@ -544,6 +549,15 @@ struct clip_cut_report {
 add_soma30_motion_glb_memory(
     std::span<const std::byte> rigged,
     const motion &soma30,
+    const humanoid_match_options &match_options = {},
+    const retarget_options &options = {});
+
+// The same for many clips at once: the skeleton is matched once and every clip is written in one
+// pass, so memory follows the size of the result (a moves file of 72 clips), not clips x file.
+[[nodiscard]] SKINTOKENS_API result<std::pair<std::vector<std::byte>, humanoid_match_report>>
+add_soma30_motions_glb_memory(
+    std::span<const std::byte> rigged,
+    std::span<const motion> soma30_clips,
     const humanoid_match_options &match_options = {},
     const retarget_options &options = {});
 
