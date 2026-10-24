@@ -91,6 +91,8 @@ struct skeleton {
     std::vector<std::string> names;
     std::vector<std::int32_t> parents;
     std::vector<vec3> rest_positions;
+    // glTF node index of each joint when loaded from a GLB; empty otherwise.
+    std::vector<std::size_t> source_nodes;
 };
 
 struct motion {
@@ -99,6 +101,10 @@ struct motion {
     skeleton rig;
     std::vector<vec3> root_translations;
     std::vector<quat> local_rotations; // [frame, joint]
+    // The joint that carries root_translations (world positions). 0, the skeleton root, unless the
+    // hips sit below another joint (an authored rig with a root joint above the hips): then the
+    // writer turns the positions into that joint's parent space.
+    std::size_t root_joint = 0;
     // Clip name written to a GLB. Empty: "RESET" (Godot's rest-pose clip name) for one frame, otherwise "Motion".
     std::string name;
 };
@@ -397,6 +403,22 @@ private:
     const skeleton &generated,
     const humanoid_match_options &options = {});
 
+// The VRM 1.0 Humanoid roles of a GLB, as (role, node index) pairs ("hips", "leftUpperArm", ...).
+// Read from KHR_character_skeleton_mapping's "vrm1_humanoid" mapping set when present, else from
+// VRMC_vrm humanoid.humanBones. Node indices are authoritative; names are never used. Empty when
+// the file has neither (VRM 0.x is not read: convert it to VRM 1.0 first).
+[[nodiscard]] SKINTOKENS_API result<std::vector<std::pair<std::string, std::size_t>>>
+vrm1_humanoid_roles_glb_memory(std::span<const std::byte> bytes);
+
+// The SOMA30 mapping from VRM 1.0 Humanoid roles, for authored rigs whose shape the generated
+// matcher does not take (a root above the hips, extra bones on the hips, one skin per part).
+// `rig.source_nodes` resolves each role's node to a joint. The required VRM 1.0 bones must be
+// joints; optional bones that are missing stay unmapped and their source rotations fold into the
+// next mapped joint.
+[[nodiscard]] SKINTOKENS_API result<humanoid_mapping> match_vrm1_humanoid(
+    const skeleton &rig,
+    const std::vector<std::pair<std::string, std::size_t>> &roles);
+
 // The humanoid match as one line of JSON, for callers outside C++ (the viewer, the CLI):
 // {"gates":"pass","roles":{"hips":"<joint name>",...}} with the 22 core roles, or
 // {"gates":"fail","why":"<first failed gate>"}.
@@ -484,6 +506,11 @@ compare_soma30_to_generated(
     std::span<const std::byte> rigged,
     const motion &animation);
 
+// Adds every clip in one pass (each on the same skeleton): the file is parsed and written once.
+[[nodiscard]] SKINTOKENS_API result<std::vector<std::byte>> add_animations_glb_memory(
+    std::span<const std::byte> rigged,
+    std::span<const motion> animations);
+
 // A SOMA30 clip in motion.elf's layout (interactor-motion-guest motion_result): per frame, per
 // joint, the parent-local row-major 3x3 (column vectors) then the translation; the root's
 // translation is its position, the others their rest offset. Rest = T-pose (identity rotations).
@@ -522,6 +549,15 @@ struct clip_cut_report {
 add_soma30_motion_glb_memory(
     std::span<const std::byte> rigged,
     const motion &soma30,
+    const humanoid_match_options &match_options = {},
+    const retarget_options &options = {});
+
+// The same for many clips at once: the skeleton is matched once and every clip is written in one
+// pass, so memory follows the size of the result (a moves file of 72 clips), not clips x file.
+[[nodiscard]] SKINTOKENS_API result<std::pair<std::vector<std::byte>, humanoid_match_report>>
+add_soma30_motions_glb_memory(
+    std::span<const std::byte> rigged,
+    std::span<const motion> soma30_clips,
     const humanoid_match_options &match_options = {},
     const retarget_options &options = {});
 

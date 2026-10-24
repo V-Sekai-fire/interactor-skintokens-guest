@@ -394,6 +394,80 @@ static Variant skintokens_motion_start(String rigged, String name, String kind_s
 	return Variant(String("STARTED motion " + g_motion.name));
 }
 
+// Every motion-matching clip onto the rigged file in one job ("whole" clips, no cut): the file is
+// read, matched and written once, so the guest holds the rig, the clips and one result, however
+// many clips there are. The clips arrive one call each (skintokens_motions_add, a few MB per call:
+// one array of every clip, 154 MB, faulted in the host's array fetch), then
+// skintokens_motions_start runs the job.
+struct MotionsJob {
+	std::string rigged;
+	std::vector<std::string> names;
+	std::vector<int32_t> parents;
+	std::vector<skintokens::motion> clips;
+	float fps = 30.0F;
+};
+static MotionsJob g_motions;
+static std::vector<std::string> split_lines(const std::string &s) {
+	std::vector<std::string> out;
+	for (size_t i = 0; i < s.size();) {
+		const size_t j = std::min(s.find('\n', i), s.size());
+		if (j > i) {
+			out.push_back(s.substr(i, j - i));
+		}
+		i = j + 1;
+	}
+	return out;
+}
+static void motions_job(void *) {
+	const std::vector<std::byte> bytes = read_whole(g_motions.rigged);
+	skintokens::humanoid_match_options match;
+	skintokens::retarget_options transfer;
+	match.minimum_confidence = transfer.minimum_confidence = 0.5F;
+	skintokens::result<std::pair<std::vector<std::byte>, skintokens::humanoid_match_report>> added =
+			skintokens::add_soma30_motions_glb_memory(bytes, g_motions.clips, match, transfer);
+	if (!added) {
+		pump::fail("skintokens: add motion: " + added.error().message);
+	}
+	const size_t n = g_motions.clips.size();
+	g_motions.clips = {};
+	g_result.assign(reinterpret_cast<const uint8_t *>(added->first.data()),
+			reinterpret_cast<const uint8_t *>(added->first.data()) + added->first.size());
+	logf_("motions: %zu clips, humanoid confidence %.3f, %zu bytes", n, added->second.confidence, g_result.size());
+}
+
+// Clears the clip list and sets the SOMA30 skeleton every clip uses (names one per line).
+static Variant skintokens_motions_begin(String names, PackedArray<int32_t> parents, double fps) {
+	g_motions = {};
+	g_motions.names = split_lines(names.utf8());
+	g_motions.parents = parents.fetch();
+	g_motions.fps = float(fps);
+	return Variant(String("OK"));
+}
+
+static Variant skintokens_motions_add(String name, PackedArray<float> transforms) {
+	skintokens::result<skintokens::motion> m =
+			skintokens::soma30_motion_from_transforms(g_motions.names, g_motions.parents, g_motions.fps, transforms.fetch());
+	if (!m) {
+		return Variant(String("FAIL motion " + name.utf8() + ": " + m.error().message));
+	}
+	m->name = name.utf8();
+	g_motions.clips.push_back(std::move(*m));
+	return Variant(String("OK " + std::to_string(g_motions.clips.size())));
+}
+
+static Variant skintokens_motions_start(String rigged) {
+	if (g_motions.clips.empty()) {
+		return Variant(String("FAIL no clips added"));
+	}
+	g_motions.rigged = rigged.utf8();
+	g_log.clear();
+	g_result.clear();
+	if (!pump::start(&motions_job, nullptr, size_t(16) << 20)) {
+		return Variant(String("FAIL a job is running"));
+	}
+	return Variant(String("STARTED motions " + std::to_string(g_motions.clips.size())));
+}
+
 static Variant skintokens_pump(PackedArray<uint8_t> in) {
 	return pump::step(in);
 }
@@ -440,6 +514,9 @@ int main() {
 	ADD_API_FUNCTION(skintokens_start, "String", "String model_dir, String mesh_glb, String opts", "Rig a GLB on the pump");
 	ADD_API_FUNCTION(skintokens_vrm_start, "String", "String vrm1", "T-pose a VRM 1.0 and frame its joints on the pump");
 	ADD_API_FUNCTION(skintokens_humanoid_start, "String", "String rigged", "Match the joints of a rigged GLB to humanoid roles (JSON result) on the pump");
+	ADD_API_FUNCTION(skintokens_motions_begin, "String", "String names, PackedInt32Array parents, float fps", "Start a clip list on the SOMA30 skeleton");
+	ADD_API_FUNCTION(skintokens_motions_add, "String", "String name, PackedFloat32Array transforms", "Add one clip to the list");
+	ADD_API_FUNCTION(skintokens_motions_start, "String", "String rigged", "Add every listed clip to a rigged GLB in one job on the pump");
 	ADD_API_FUNCTION(skintokens_motion_start, "String", "String rigged, String name, String kind_seconds, String names, PackedInt32Array parents, PackedFloat32Array transforms, float fps", "Cut a motion.elf clip (loop|once seconds|whole) and add it to a rigged GLB on the pump");
 	ADD_API_FUNCTION(skintokens_pump, "Array", "PackedByteArray data", "Resume the job once: [header, text, rid]");
 	ADD_API_FUNCTION(skintokens_result_size, "int", "", "Bytes of the rigged GLB");

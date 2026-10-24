@@ -622,6 +622,81 @@ result<humanoid_mapping> match_generated_humanoid(
     return output;
 }
 
+result<humanoid_mapping> match_vrm1_humanoid(
+    const skeleton &rig, const std::vector<std::pair<std::string, std::size_t>> &roles) {
+    auto valid = validate(rig);
+    if (!valid) return std::unexpected(valid.error());
+    if (rig.source_nodes.size() != rig.names.size())
+        return std::unexpected(detail::fail(error_code::invalid_argument,
+            "VRM humanoid mapping needs the skeleton's glTF node indices"));
+    const auto joint_of = [&](std::string_view bone) -> std::optional<std::size_t> {
+        for (const auto &[name, node] : roles) {
+            if (name != bone) continue;
+            for (std::size_t joint = 0; joint < rig.source_nodes.size(); ++joint)
+                if (rig.source_nodes[joint] == node) return joint;
+            return std::nullopt;
+        }
+        return std::nullopt;
+    };
+    // The required bones of the VRM 1.0 Humanoid.
+    static constexpr std::array<std::string_view, 15> required{{"hips", "spine", "head", "leftUpperArm",
+        "leftLowerArm", "leftHand", "rightUpperArm", "rightLowerArm", "rightHand", "leftUpperLeg",
+        "leftLowerLeg", "leftFoot", "rightUpperLeg", "rightLowerLeg", "rightFoot"}};
+    for (const auto bone : required)
+        if (!joint_of(bone))
+            return std::unexpected(detail::fail(error_code::invalid_argument,
+                "VRM 1.0 humanoid bone " + std::string{bone} + " is missing or is not a joint of a skin"));
+
+    humanoid_mapping output;
+    output.soma_to_generated.fill(-1);
+    output.generated_roles.assign(rig.names.size(), semantic_role::unmapped);
+    std::size_t mapped = 0U;
+    const auto assign = [&](std::size_t soma, std::optional<std::size_t> joint, semantic_role role) {
+        if (!joint || output.generated_roles[*joint] != semantic_role::unmapped) return;
+        output.soma_to_generated[soma] = static_cast<std::int32_t>(*joint);
+        output.generated_roles[*joint] = role;
+        ++mapped;
+    };
+    // SOMA30's trunk is Spine1, Spine2, Chest. VRM's is spine, chest, upperChest, with the last two
+    // optional: with no upperChest, the VRM chest takes SOMA Chest and Spine2's rotation folds into
+    // it; with no chest either, both fold into the neck.
+    const auto chest = joint_of("chest"), upper_chest = joint_of("upperChest");
+    assign(0U, joint_of("hips"), semantic_role::hips);
+    assign(1U, joint_of("spine"), semantic_role::spine1);
+    if (upper_chest) {
+        assign(2U, chest, semantic_role::spine2);
+        assign(3U, upper_chest, semantic_role::chest);
+    } else {
+        assign(3U, chest, semantic_role::chest);
+    }
+    assign(4U, joint_of("neck"), semantic_role::neck);
+    assign(6U, joint_of("head"), semantic_role::head);
+    const std::array<std::pair<std::string_view, semantic_role>, 4> left_arm{{{"leftShoulder", semantic_role::left_shoulder},
+        {"leftUpperArm", semantic_role::left_upper_arm}, {"leftLowerArm", semantic_role::left_forearm},
+        {"leftHand", semantic_role::left_hand}}};
+    const std::array<std::pair<std::string_view, semantic_role>, 4> right_arm{{{"rightShoulder", semantic_role::right_shoulder},
+        {"rightUpperArm", semantic_role::right_upper_arm}, {"rightLowerArm", semantic_role::right_forearm},
+        {"rightHand", semantic_role::right_hand}}};
+    const std::array<std::pair<std::string_view, semantic_role>, 4> left_leg{{{"leftUpperLeg", semantic_role::left_upper_leg},
+        {"leftLowerLeg", semantic_role::left_shin}, {"leftFoot", semantic_role::left_foot},
+        {"leftToes", semantic_role::left_toe}}};
+    const std::array<std::pair<std::string_view, semantic_role>, 4> right_leg{{{"rightUpperLeg", semantic_role::right_upper_leg},
+        {"rightLowerLeg", semantic_role::right_shin}, {"rightFoot", semantic_role::right_foot},
+        {"rightToes", semantic_role::right_toe}}};
+    for (std::size_t index = 0; index < 4U; ++index) {
+        assign(10U + index, joint_of(left_arm[index].first), left_arm[index].second);
+        assign(16U + index, joint_of(right_arm[index].first), right_arm[index].second);
+        assign(22U + index, joint_of(left_leg[index].first), left_leg[index].second);
+        assign(26U + index, joint_of(right_leg[index].first), right_leg[index].second);
+    }
+    output.report.core_score = 1.0F;
+    output.report.confidence = 1.0F;
+    output.report.alternative_margin = 0.0F;
+    output.report.mapped_core_joints = mapped;
+    output.report.ignored_terminal_joints = 0U;
+    return output;
+}
+
 std::string humanoid_roles_json(const skeleton &generated) {
     static constexpr std::array<const char *, 23> names{"unmapped", "hips", "spine1", "spine2", "chest",
         "neck", "head", "left_shoulder", "left_upper_arm", "left_forearm", "left_hand",
@@ -737,8 +812,12 @@ result<motion> retarget_soma30_motion_to_generated(
 
     const auto source_head = source[6], source_left_toe = source[25], source_right_toe = source[29];
     const auto target_index = [&](std::size_t soma) { return static_cast<std::size_t>(mapping.soma_to_generated[soma]); };
+    // A VRM may have no toe bones (optional in VRM): measure the target's height to its feet then.
+    const auto toe_or_foot = [&](std::size_t toe, std::size_t foot) {
+        return target_index(mapping.soma_to_generated[toe] >= 0 ? toe : foot);
+    };
     const vec3 source_feet = scale(add(animation.rig.rest_positions[source_left_toe], animation.rig.rest_positions[source_right_toe]), .5F);
-    const vec3 target_feet = scale(add(generated.rest_positions[target_index(25U)], generated.rest_positions[target_index(29U)]), .5F);
+    const vec3 target_feet = scale(add(generated.rest_positions[toe_or_foot(25U, 24U)], generated.rest_positions[toe_or_foot(29U, 28U)]), .5F);
     const float source_height = distance(animation.rig.rest_positions[source_head], source_feet);
     const float target_height = distance(generated.rest_positions[target_index(6U)], target_feet);
     if (source_height <= 1.0e-8F || target_height <= 1.0e-8F)
@@ -748,6 +827,7 @@ result<motion> retarget_soma30_motion_to_generated(
     output.root_translations.resize(output.frames);
     for (std::size_t frame = 0; frame < output.frames; ++frame)
         output.root_translations[frame] = add(root, scale(sub(animation.root_translations[frame], first), travel));
+    output.root_joint = target_index(0U);
     return output;
 }
 

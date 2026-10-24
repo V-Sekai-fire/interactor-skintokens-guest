@@ -421,6 +421,30 @@ result<matrix4> node_matrix(const json &node) {
         tx, ty, tz, 1};
 }
 
+// Inverse of an affine matrix (any invertible 3x3 part plus a translation).
+matrix4 inverse_affine(const matrix4 &m) {
+    const float a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], i = m[10];
+    const float A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
+    const float det = a * A + b * B + c * C;
+    if (std::abs(det) < 1e-12F) return identity_matrix();
+    const float s = 1.0F / det;
+    matrix4 r{};
+    r[0] = A * s;
+    r[4] = -(b * i - c * h) * s;
+    r[8] = (b * f - c * e) * s;
+    r[1] = B * s;
+    r[5] = (a * i - c * g) * s;
+    r[9] = -(a * f - c * d) * s;
+    r[2] = C * s;
+    r[6] = -(a * h - b * g) * s;
+    r[10] = (a * e - b * d) * s;
+    r[15] = 1.0F;
+    r[12] = -(r[0] * m[12] + r[4] * m[13] + r[8] * m[14]);
+    r[13] = -(r[1] * m[12] + r[5] * m[13] + r[9] * m[14]);
+    r[14] = -(r[2] * m[12] + r[6] * m[13] + r[10] * m[14]);
+    return r;
+}
+
 vec3 transform_point(const matrix4 &matrix, vec3 value) {
     return {matrix[0] * value.x + matrix[4] * value.y + matrix[8] * value.z + matrix[12],
         matrix[1] * value.x + matrix[5] * value.y + matrix[9] * value.z + matrix[13],
@@ -1028,6 +1052,7 @@ result<motion> load_skeleton_document(const document &doc, bool require_animatio
     for (std::size_t joint = 0; joint < joint_count; ++joint) {
         const std::size_t node_index = joint_nodes[joint];
         output.rig.names[joint] = (*nodes)[node_index].value("name", "joint_" + std::to_string(joint));
+        output.rig.source_nodes.push_back(node_index);
         std::int32_t parent_node = node_parents[node_index];
         while (parent_node >= 0 && node_to_joint[static_cast<std::size_t>(parent_node)] < 0)
             parent_node = node_parents[static_cast<std::size_t>(parent_node)];
@@ -1219,6 +1244,51 @@ result<motion> load_skeleton_glb_memory(std::span<const std::byte> bytes) {
     auto doc = parse_document(bytes);
     if (!doc) return std::unexpected(doc.error());
     return load_skeleton_document(*doc, false);
+}
+
+result<std::vector<std::pair<std::string, std::size_t>>> vrm1_humanoid_roles_glb_memory(std::span<const std::byte> bytes) {
+    auto doc = parse_document(bytes);
+    if (!doc) return std::unexpected(doc.error());
+    std::vector<std::pair<std::string, std::size_t>> out;
+    const auto nodes = doc->root.find("nodes");
+    const auto extensions = doc->root.find("extensions");
+    if (nodes == doc->root.end() || !nodes->is_array() || extensions == doc->root.end() || !extensions->is_object())
+        return out;
+    const auto bad = [](const char *why) {
+        return std::unexpected(detail::fail(error_code::invalid_format, why));
+    };
+    // Each role maps to {"node": index}, in both KHR_character_skeleton_mapping and VRMC_vrm.
+    const auto read = [&](const json &roles, const char *why) -> result<void> {
+        for (const auto &[role, value] : roles.items()) {
+            if (!value.is_object() || !value.contains("node") || !value["node"].is_number_unsigned() ||
+                value["node"].get<std::size_t>() >= nodes->size())
+                return bad(why);
+            out.emplace_back(role, value["node"].get<std::size_t>());
+        }
+        return {};
+    };
+    // KHR_character_skeleton_mapping (draft, KhronosGroup/glTF#2512): the "vrm1_humanoid" set.
+    if (const auto khr = extensions->find("KHR_character_skeleton_mapping"); khr != extensions->end() && khr->is_object()) {
+        const auto sets = khr->find("skeletalRigMappings");
+        if (sets != khr->end() && sets->is_object()) {
+            const auto vrm1 = sets->find("vrm1_humanoid");
+            if (vrm1 != sets->end() && vrm1->is_object()) {
+                auto ok = read(*vrm1, "KHR_character_skeleton_mapping vrm1_humanoid role has an invalid node");
+                if (!ok) return std::unexpected(ok.error());
+                return out;
+            }
+        }
+    }
+    // VRM 1.0: VRMC_vrm.humanoid.humanBones {"hips": {"node": 3}, ...}.
+    if (const auto vrm = extensions->find("VRMC_vrm"); vrm != extensions->end() && vrm->is_object()) {
+        const auto humanoid = vrm->find("humanoid");
+        if (humanoid == vrm->end() || !humanoid->is_object()) return out;
+        const auto bones = humanoid->find("humanBones");
+        if (bones == humanoid->end() || !bones->is_object()) return out;
+        auto ok = read(*bones, "VRMC_vrm humanoid bone has an invalid node");
+        if (!ok) return std::unexpected(ok.error());
+    }
+    return out;
 }
 
 result<motion> load_kimodo_glb_file(const std::filesystem::path &path) {
@@ -2100,6 +2170,16 @@ result<std::vector<std::byte>> save_rigged_source_glb_memory(
 
 result<std::vector<std::byte>> add_animation_glb_memory(
     std::span<const std::byte> rigged, const motion &animation) {
+    return add_animations_glb_memory(rigged, std::span<const motion>(&animation, 1U));
+}
+
+// Every clip in one pass: the GLB is parsed and written once, so adding N clips costs the size of
+// the result, not N rewrites of a file that grows with each clip.
+result<std::vector<std::byte>> add_animations_glb_memory(
+    std::span<const std::byte> rigged, std::span<const motion> animations) {
+    if (animations.empty())
+        return std::unexpected(detail::fail(error_code::invalid_argument, "no animations to add"));
+    const motion &first = animations.front();
     auto doc = parse_document(rigged);
     if (!doc) return std::unexpected(doc.error());
     glb_builder builder;
@@ -2113,10 +2193,8 @@ result<std::vector<std::byte>> add_animation_glb_memory(
     // The skeleton is every skin's joints together (one skin per mesh is common).
     auto skin_joints = skin_joint_union(root, root["nodes"].size());
     if (!skin_joints) return std::unexpected(skin_joints.error());
-    const std::size_t joint_count = animation.rig.names.size();
-    if (animation.frames == 0U || animation.root_translations.size() != animation.frames ||
-        animation.local_rotations.size() != animation.frames * joint_count ||
-        skin_joints->size() != joint_count)
+    const std::size_t joint_count = first.rig.names.size();
+    if (skin_joints->size() != joint_count)
         return std::unexpected(detail::fail(error_code::invalid_argument, "animation does not match the skin skeleton"));
     // The clip's joints are the skin's, found by name (the skeleton loader names them the same way).
     std::vector<std::size_t> targets(joint_count);
@@ -2124,13 +2202,13 @@ result<std::vector<std::byte>> add_animation_glb_memory(
         std::size_t found = no_node;
         for (std::size_t slot = 0; slot < joint_count; ++slot) {
             const std::size_t node = (*skin_joints)[slot];
-            if (root["nodes"][node].value("name", "joint_" + std::to_string(slot)) != animation.rig.names[joint]) continue;
+            if (root["nodes"][node].value("name", "joint_" + std::to_string(slot)) != first.rig.names[joint]) continue;
             if (found != no_node)
                 return std::unexpected(detail::fail(error_code::invalid_format, "skin joint names are not unique"));
             found = node;
         }
         if (found == no_node)
-            return std::unexpected(detail::fail(error_code::invalid_argument, "clip joint is not in the skin: " + animation.rig.names[joint]));
+            return std::unexpected(detail::fail(error_code::invalid_argument, "clip joint is not in the skin: " + first.rig.names[joint]));
         targets[joint] = found;
     }
     // Each node's world rest rotation: the clip's rotations are turned into the joints' own frames.
@@ -2150,32 +2228,57 @@ result<std::vector<std::byte>> add_animation_glb_memory(
         own_frame[joint] = world_rest(static_cast<std::int32_t>(targets[joint]), 0);
         parent_frame[joint] = world_rest(node_parent[targets[joint]], 0);
     }
-    std::vector<float> times(animation.frames);
-    const float fps = animation.frames_per_second > 0.0F ? animation.frames_per_second : 30.0F;
-    for (std::size_t frame = 0; frame < animation.frames; ++frame) times[frame] = static_cast<float>(frame) / fps;
-    const auto time_accessor = builder.accessor_for<float>(times, 5126U, "SCALAR", std::nullopt,
-        json{{"min", {times.front()}}, {"max", {times.back()}}});
-    json samplers = json::array();
-    json channels = json::array();
-    samplers.push_back({{"input", time_accessor}, {"output", builder.accessor_for<vec3>(animation.root_translations, 5126U, "VEC3")},
-        {"interpolation", "LINEAR"}});
-    channels.push_back({{"sampler", 0U}, {"target", {{"node", targets[0]}, {"path", "translation"}}}});
-    for (std::size_t joint = 0; joint < joint_count; ++joint) {
-        std::vector<quat> values(animation.frames);
-        for (std::size_t frame = 0; frame < animation.frames; ++frame)
-            values[frame] = q_norm(q_mul(q_mul(q_conj(parent_frame[joint]),
-                                             animation.local_rotations[frame * joint_count + joint]),
-                own_frame[joint]));
-        const auto sampler = samplers.size();
-        samplers.push_back({{"input", time_accessor}, {"output", builder.accessor_for<quat>(values, 5126U, "VEC4")},
+    std::vector<std::string> names;
+    json clips = json::array();
+    for (const motion &animation : animations) {
+        if (animation.frames == 0U || animation.root_translations.size() != animation.frames ||
+            animation.local_rotations.size() != animation.frames * joint_count ||
+            animation.rig.names != first.rig.names)
+            return std::unexpected(detail::fail(error_code::invalid_argument, "animation does not match the skin skeleton"));
+        std::vector<float> times(animation.frames);
+        const float fps = animation.frames_per_second > 0.0F ? animation.frames_per_second : 30.0F;
+        for (std::size_t frame = 0; frame < animation.frames; ++frame) times[frame] = static_cast<float>(frame) / fps;
+        const auto time_accessor = builder.accessor_for<float>(times, 5126U, "SCALAR", std::nullopt,
+            json{{"min", {times.front()}}, {"max", {times.back()}}});
+        json samplers = json::array();
+        json channels = json::array();
+        if (animation.root_joint >= joint_count)
+            return std::unexpected(detail::fail(error_code::invalid_argument, "animation root joint is not in the skeleton"));
+        // The root travel goes on the hips. Below a root joint, the hips' translation is in that
+        // joint's space: turn the world positions into it (the skeleton root keeps the old values).
+        std::vector<vec3> root_values = animation.root_translations;
+        const std::size_t root_node = targets[animation.root_joint];
+        if (animation.root_joint != 0U) {
+            matrix4 parent_world = identity_matrix();
+            for (std::int32_t node = node_parent[root_node], depth = 0; node >= 0 && depth < 4096;
+                node = node_parent[static_cast<std::size_t>(node)], ++depth) {
+                auto local = node_matrix(root["nodes"][static_cast<std::size_t>(node)]);
+                if (!local) return std::unexpected(local.error());
+                parent_world = multiply(*local, parent_world);
+            }
+            const matrix4 to_parent = inverse_affine(parent_world);
+            for (auto &value : root_values) value = transform_point(to_parent, value);
+        }
+        samplers.push_back({{"input", time_accessor}, {"output", builder.accessor_for<vec3>(root_values, 5126U, "VEC3")},
             {"interpolation", "LINEAR"}});
-        channels.push_back({{"sampler", sampler}, {"target", {{"node", targets[joint]}, {"path", "rotation"}}}});
+        channels.push_back({{"sampler", 0U}, {"target", {{"node", root_node}, {"path", "translation"}}}});
+        for (std::size_t joint = 0; joint < joint_count; ++joint) {
+            std::vector<quat> values(animation.frames);
+            for (std::size_t frame = 0; frame < animation.frames; ++frame)
+                values[frame] = q_norm(q_mul(q_mul(q_conj(parent_frame[joint]),
+                                                 animation.local_rotations[frame * joint_count + joint]),
+                    own_frame[joint]));
+            const auto sampler = samplers.size();
+            samplers.push_back({{"input", time_accessor}, {"output", builder.accessor_for<quat>(values, 5126U, "VEC4")},
+                {"interpolation", "LINEAR"}});
+            channels.push_back({{"sampler", sampler}, {"target", {{"node", targets[joint]}, {"path", "rotation"}}}});
+        }
+        names.push_back(animation_name(animation));
+        clips.push_back({{"name", names.back()}, {"samplers", std::move(samplers)}, {"channels", std::move(channels)}});
     }
-    const std::string name = animation_name(animation);
-    // The new clip goes first: readers that take animations[0] (load_kimodo_glb_file) get the motion.
-    json clips = json::array({{{"name", name}, {"samplers", std::move(samplers)}, {"channels", std::move(channels)}}});
+    // The new clips go first: readers that take animations[0] (load_kimodo_glb_file) get the motion.
     for (auto &clip : root.value("animations", json::array()))
-        if (clip.value("name", std::string{}) != name) clips.push_back(clip);
+        if (std::find(names.begin(), names.end(), clip.value("name", std::string{})) == names.end()) clips.push_back(clip);
     root["animations"] = std::move(clips);
     align4(builder.binary);
     root["buffers"][0]["byteLength"] = builder.binary.size();
