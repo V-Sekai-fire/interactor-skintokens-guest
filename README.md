@@ -21,7 +21,7 @@ godot --path tests/rig --resolution 64x64 --script run_rig.gd -- \
 
 ## Licence
 
-This repository is licensed under the MIT License; see `LICENSE`. Vendored files keep their own licences: `vendor/skin-tokens-ggml/LICENSE` (Apache-2.0, with upstream notices in its `NOTICE`; SkinTokens is MIT) and the MIT notice in `vendor/nlohmann/json.hpp`.
+This repository is dual-licensed under either the Apache License 2.0 (`LICENSE-APACHE`) or the MIT License (`LICENSE-MIT`), at your option. Vendored files keep their own licences: `vendor/skin-tokens-ggml/LICENSE` (Apache-2.0, with upstream notices in its `NOTICE`; SkinTokens is MIT) and the MIT notice in `vendor/nlohmann/json.hpp`.
 
 ## Run in a browser
 
