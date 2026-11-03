@@ -2506,6 +2506,24 @@ result<std::vector<std::byte>> add_animations_glb_memory(
                 values[frame] = q_norm(q_mul(q_mul(q_conj(parent_frame[joint]),
                                                  animation.local_rotations[frame * joint_count + joint]),
                     own_frame[joint]));
+            // A joint the clip does not move keeps one key, not one per frame: a rig with hundreds of
+            // joints (a merged multi-root VRM) otherwise makes every clip megabytes of identical values.
+            bool constant = true;
+            for (std::size_t frame = 1; frame < animation.frames && constant; ++frame) {
+                const quat &a = values[0], &b = values[frame];
+                constant = std::abs(a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w) > 0.9999999F;
+            }
+            if (constant) {
+                const std::vector<float> once(1U, 0.0F);
+                const auto once_accessor = builder.accessor_for<float>(once, 5126U, "SCALAR", std::nullopt,
+                    json{{"min", {0.0F}}, {"max", {0.0F}}});
+                const auto sampler = samplers.size();
+                samplers.push_back({{"input", once_accessor},
+                    {"output", builder.accessor_for<quat>(std::vector<quat>(1U, values[0]), 5126U, "VEC4")},
+                    {"interpolation", "LINEAR"}});
+                channels.push_back({{"sampler", sampler}, {"target", {{"node", targets[joint]}, {"path", "rotation"}}}});
+                continue;
+            }
             const auto sampler = samplers.size();
             samplers.push_back({{"input", time_accessor}, {"output", builder.accessor_for<quat>(values, 5126U, "VEC4")},
                 {"interpolation", "LINEAR"}});
