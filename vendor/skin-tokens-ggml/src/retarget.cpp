@@ -828,8 +828,16 @@ result<motion> retarget_soma30_motion_to_generated(
     const float travel = options.scale_root_motion ? target_height / source_height : 1.0F;
     const vec3 first = animation.root_translations.front(), root = generated.rest_positions[target_index(0U)];
     output.root_translations.resize(output.frames);
-    for (std::size_t frame = 0; frame < output.frames; ++frame)
-        output.root_translations[frame] = add(root, scale(sub(animation.root_translations[frame], first), travel));
+    // The horizontal travel starts at the target's rest position (the first frame is the origin). The height does not: it is
+    // the source's hips height above its own rest height, scaled to the target. A clip that starts crouched or on all fours
+    // (hips at half the standing height from its first frame) otherwise comes out with the hips at the rest height all the
+    // way through, and the pose floats at standing hips height.
+    const float source_rest_height = animation.rig.rest_positions.front().y;
+    for (std::size_t frame = 0; frame < output.frames; ++frame) {
+        vec3 travelled = sub(animation.root_translations[frame], first);
+        travelled.y = animation.root_translations[frame].y - source_rest_height;
+        output.root_translations[frame] = add(root, scale(travelled, travel));
+    }
     output.root_joint = target_index(0U);
     return output;
 }
