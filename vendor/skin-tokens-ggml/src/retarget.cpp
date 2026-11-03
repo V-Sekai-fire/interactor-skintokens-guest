@@ -832,7 +832,11 @@ result<motion> retarget_soma30_motion_to_generated(
     // the source's hips height above its own rest height, scaled to the target. A clip that starts crouched or on all fours
     // (hips at half the standing height from its first frame) otherwise comes out with the hips at the rest height all the
     // way through, and the pose floats at standing hips height.
-    const float source_rest_height = animation.rig.rest_positions.front().y;
+    // The rig's root rests where the clip's first frame puts it, so rest_positions.front() is not a standing height. The T-pose
+    // hips height above the lowest joint (the soles) is: it is the same for every clip on the skeleton.
+    float lowest_rest = animation.rig.rest_positions.front().y;
+    for (const auto &position : animation.rig.rest_positions) lowest_rest = std::min(lowest_rest, position.y);
+    const float source_rest_height = animation.rig.rest_positions.front().y - lowest_rest;
     for (std::size_t frame = 0; frame < output.frames; ++frame) {
         vec3 travelled = sub(animation.root_translations[frame], first);
         travelled.y = animation.root_translations[frame].y - source_rest_height;
