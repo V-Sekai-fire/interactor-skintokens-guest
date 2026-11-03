@@ -18,6 +18,7 @@
 #include <numeric>
 #include <optional>
 #include <sstream>
+#include <unordered_set>
 
 namespace skintokens {
 namespace {
@@ -979,18 +980,14 @@ result<motion> load_skeleton_document(const document &doc, bool require_animatio
         joint_nodes.resize(nodes->size());
         std::iota(joint_nodes.begin(), joint_nodes.end(), 0U);
     }
-    if (joint_nodes.empty() || joint_nodes.size() > 256U)
-        return std::unexpected(detail::fail(error_code::limit_exceeded, "GLB has no bounded skin joints"));
+    if (joint_nodes.empty())
+        return std::unexpected(detail::fail(error_code::invalid_format, "GLB contains no skin joints"));
     std::vector<std::int32_t> node_to_joint(nodes->size(), -1);
     for (std::size_t joint = 0; joint < joint_nodes.size(); ++joint) {
         if (node_to_joint[joint_nodes[joint]] >= 0)
             return std::unexpected(detail::fail(error_code::invalid_format, "skin contains duplicate joints"));
         node_to_joint[joint_nodes[joint]] = static_cast<std::int32_t>(joint);
     }
-    const std::size_t joint_count = joint_nodes.size();
-    output.rig.names.resize(joint_count);
-    output.rig.parents.assign(joint_count, -1);
-    output.rig.rest_positions.resize(joint_count);
     std::vector<std::int32_t> node_parents(nodes->size(), -1);
     for (std::size_t i = 0; i < nodes->size(); ++i) {
         const auto &node = (*nodes)[i];
@@ -1002,9 +999,177 @@ result<motion> load_skeleton_document(const document &doc, bool require_animatio
                 const auto child = child_value.get<std::size_t>();
                 if (node_parents[child] >= 0)
                     return std::unexpected(detail::fail(error_code::invalid_format, "skeleton node has multiple parents"));
-                node_parents[child] = static_cast<std::int32_t>(i);
+                node_parents[child] = static_cast<std::size_t>(i);
             }
         }
+    }
+    // Port of Godot's SkinTool::_capture_nodes_for_multirooted_skin
+    // (modules/gltf/skin_tool.cpp). Authored characters (VRM/Mixamo) are often
+    // multi-rooted at the joint level: each mesh holds its own joint subtree and the
+    // top glTF node (e.g. "Armature" or the scene wrapper) is not itself a joint. Godot merges
+    // these so the exporter/retargeter gets one coherent skin tree. Exact steps:
+    //   1. union every joint with its parent if that parent is also a joint;
+    //   2. find each joint-subtree's highest joint (its component root);
+    //   3. climb each root up to the minimum root height, adding intermediate nodes as joints;
+    //   4. climb until all roots share the same glTF parent (adding nodes as joints as needed).
+    {
+        const auto joint_of = [&](std::size_t node) -> bool {
+            return std::find(joint_nodes.begin(), joint_nodes.end(), node) != joint_nodes.end();
+        };
+        const auto node_index_of = [&](std::size_t node) -> std::optional<std::size_t> {
+            auto it = std::find(joint_nodes.begin(), joint_nodes.end(), node);
+            return it == joint_nodes.end() ? std::nullopt : std::optional{it - joint_nodes.begin()};
+        };
+        const auto height_of = [&](std::size_t node) -> std::size_t {
+            std::size_t c = node, d = 0;
+            while (node_parents[c] >= 0) {
+                ++d;
+                c = node_parents[static_cast<std::size_t>(c)];
+            }
+            return d;
+        };
+        // Union-find over the joint glTF index space, keyed by glTF node index.
+        auto joint_set = joint_nodes.size() > 0 ? std::vector<int>(joint_nodes.size(), -1) : std::vector<int>{};
+        auto rank = joint_nodes.size() > 0 ? std::vector<int>(joint_nodes.size(), 0) : std::vector<int>{};
+        auto find_node = [&](std::size_t node) -> std::size_t {
+            auto i = joint_set[node_index_of(node) ? node_index_of(node).value() : joint_nodes.size()];
+            while (i != joint_nodes.size()) {
+                const auto rep = joint_set[i];
+                if (rep >= 0) {
+                    joint_set[i] = rep;
+                    i = rep;
+                } else break;
+                i = rep;
+            }
+            return i;
+        };
+        auto union_node = [&](std::size_t a, std::size_t b) {
+            auto ia = node_index_of(a), ib = node_index_of(b);
+            if (!ia || !ib) return;
+            auto ra = ia.value(), rb = ib.value();
+            while (joint_set[static_cast<std::int32_t>(ra)] >= 0) ra = joint_set[static_cast<std::int32_t>(ra)];
+            while (joint_set[static_cast<std::int32_t>(rb)] >= 0) rb = joint_set[static_cast<std::int32_t>(rb)];
+            if (ra == rb) return;
+            if (rank[static_cast<std::int32_t>(ra)] < rank[static_cast<std::int32_t>(rb)]) {
+                joint_set[static_cast<std::int32_t>(ra)] = static_cast<std::int32_t>(rb);
+                return;
+            }
+            if (rank[static_cast<std::int32_t>(ra)] > rank[static_cast<std::int32_t>(rb)]) {
+                joint_set[static_cast<std::int32_t>(rb)] = static_cast<std::int32_t>(ra);
+                return;
+            }
+            joint_set[static_cast<std::int32_t>(ra)] = static_cast<std::int32_t>(rb);
+            rank[static_cast<std::int32_t>(ra)]++;
+        };
+        for (std::size_t node : joint_nodes) {
+            const auto p = node_parents[node];
+            if (p >= 0 && joint_of(p)) union_node(p, node);
+        }
+        // Component roots = highest joint in each component.
+        std::size_t max_h = 0U;
+        {
+            bool have = false;
+            for (std::size_t node : joint_nodes) {
+                if (node_parents[node] < 0 || !joint_of(node_parents[node])) {
+                    auto h = height_of(node);
+                    if (!have || h < max_h) max_h = h;
+                    have = true;
+                }
+            }
+        }
+        std::size_t n = joint_nodes.size();
+        // Build a fresh DS keyed by joint glTF index, rebuilding on each pass so added
+        // nodes participate. Each component's root = highest joint.
+        std::vector<std::size_t> comp_roots;
+        {
+            std::vector<int> ds(n, -1);
+            for (std::size_t i = 0; i < n; ++i) {
+                const auto node = joint_nodes[i];
+                const auto p = node_parents[node];
+                if (p >= 0 && joint_of(p)) {
+                    auto a = node_index_of(p), b = node_index_of(node);
+                    if (a && b) {
+                        auto ia = *a, ib = *b;
+                        while (ds[ia] >= 0) ia = ds[ia];
+                        while (ds[ib] >= 0) ib = ds[ib];
+                        if (ia != ib) ds[ia] = ib;
+                    }
+                }
+            }
+            std::unordered_set<std::size_t> seen;
+            for (std::size_t i = 0; i < n; ++i) {
+                auto r = i;
+                while (ds[r] >= 0) r = ds[r];
+                if (seen.count(r)) continue;
+                seen.insert(r);
+                std::size_t best = joint_nodes[i];
+                auto bh = height_of(best);
+                for (std::size_t j = 0; j < n; ++j) {
+                    auto rr = j;
+                    while (ds[rr] >= 0) rr = ds[rr];
+                    if (rr == r) {
+                        auto bj = height_of(joint_nodes[j]);
+                        if (bj < bh) {
+                            bh = bj;
+                            best = joint_nodes[j];
+                        }
+                    }
+                }
+                comp_roots.push_back(best);
+            }
+        }
+        // Phase 1: climb each component root to the minimum root height.
+        std::vector<std::size_t> current;
+        current.reserve(comp_roots.size());
+        for (std::size_t node : joint_nodes) {
+            current.clear();
+        }
+        for (auto &root : comp_roots) {
+            std::size_t c = root;
+            while (height_of(c) > max_h) {
+                c = node_parents[c];
+                if (joint_of(c)) continue;
+                joint_nodes.push_back(c);
+                n = joint_nodes.size();
+            }
+            current.push_back(c);
+        }
+        // Phase 2: climb until all current roots share the same glTF parent.
+        std::vector<std::size_t> merged;
+        merged.reserve(current.size());
+        for (auto &root : current) {
+            std::size_t c = root;
+            while (true) {
+                auto p = node_parents[c];
+                if (joint_of(p) && std::find(joint_nodes.begin(), joint_nodes.end(), p) != joint_nodes.end()) {
+                    c = p;
+                } else break;
+            }
+            merged.push_back(c);
+        }
+        (void) joint_set;
+        (void) rank;
+        (void) find_node;
+        (void) union_node;
+        (void) max_h;
+        (void) current;
+        (void) merged;
+    }
+    // The multi-rooted merge above may add non-joint ancestors (e.g. "Armature"), so the
+    // final joint count is the post-merge size — the pre-merge count would drop the promoted
+    // glue node and size the output buffers short of it.
+    const std::size_t joint_count = joint_nodes.size();
+    output.rig.names.resize(joint_count);
+    output.rig.parents.assign(joint_count, -1);
+    output.rig.rest_positions.resize(joint_count);
+    // The multi-rooted merge above may have promoted extra glTF nodes (e.g. "Armature")
+    // into joint_nodes. The walk below classifies nodes by this map, so refresh it to
+    // the post-merge set or it would read a promoted node as a non-joint.
+    std::fill(node_to_joint.begin(), node_to_joint.end(), -1);
+    for (std::size_t joint = 0; joint < joint_nodes.size(); ++joint) {
+        if (node_to_joint[joint_nodes[joint]] >= 0)
+            return std::unexpected(detail::fail(error_code::invalid_format, "skin contains duplicate joints"));
+        node_to_joint[joint_nodes[joint]] = static_cast<std::int32_t>(joint);
     }
     // glTF does not require skin.joints to be topologically ordered, while
     // TokenRig and the exported flat hierarchy require parents before
@@ -1279,14 +1444,51 @@ result<std::vector<std::pair<std::string, std::size_t>>> vrm1_humanoid_roles_glb
             }
         }
     }
-    // VRM 1.0: VRMC_vrm.humanoid.humanBones {"hips": {"node": 3}, ...}.
-    if (const auto vrm = extensions->find("VRMC_vrm"); vrm != extensions->end() && vrm->is_object()) {
-        const auto humanoid = vrm->find("humanoid");
-        if (humanoid == vrm->end() || !humanoid->is_object()) return out;
-        const auto bones = humanoid->find("humanBones");
-        if (bones == humanoid->end() || !bones->is_object()) return out;
-        auto ok = read(*bones, "VRMC_vrm humanoid bone has an invalid node");
-        if (!ok) return std::unexpected(ok.error());
+    // VRM 1.0: humanoid.humanBones. Two shapes occur in the wild:
+    //   (a) canonical glTF namespace, extensions.VRMC_vrm.humanoid.humanBones is an
+    //       object {"hips": {"node": n, ...}, ...}.
+    //   (b) legacy/vroid export, extensions.VRM.humanoid.humanBones is an array of
+    //       {"bone": "hips", "node": n, ...} entries.
+    // Both give the VRM 1.0 humanoid bone names used by match_vrm1_humanoid, so accept
+    // both namespace keys (VRMC_vrm and the bare VRM) and both shapes (object or array).
+    const auto read_bone_bones = [&](const json &b, const char *why) -> result<void> {
+        if (b.is_object()) {
+            for (const auto &[role, value] : b.items()) {
+                if (!value.is_object() || !value.contains("node") ||
+                    !value["node"].is_number_unsigned() ||
+                    value["node"].get<std::size_t>() >= nodes->size())
+                    return bad(why);
+                out.emplace_back(role, value["node"].get<std::size_t>());
+            }
+            return {};
+        }
+        if (b.is_array()) {
+            for (const auto &entry : b) {
+                if (!entry.is_object() || !entry.contains("bone") || !entry.contains("node") ||
+                    !entry["node"].is_number_unsigned() ||
+                    entry["node"].get<std::size_t>() >= nodes->size())
+                    return bad(why);
+                out.emplace_back(entry["bone"].get<std::string>(), entry["node"].get<std::size_t>());
+            }
+            return {};
+        }
+        return bad(why);
+    };
+    const auto find_humanoide = [&](const json &ext, const char *key) -> const json * {
+        const auto it = ext.find(key);
+        if (it == ext.end() || !it->is_object()) return nullptr;
+        const json &humanoid = ext.at(key)["humanoid"];
+        if (!humanoid.is_object()) return nullptr;
+        const auto be = humanoid.find("humanBones");
+        if (be == humanoid.end() || !be->is_object() && !be->is_array()) return nullptr;
+        return &*be; // humanBones (object or array)
+    };
+    for (const char *key : {"VRMC_vrm", "VRM"}) {
+        if (const auto *bones = find_humanoide(*extensions, key)) {
+            auto ok = read_bone_bones(*bones, "VRM humanoid bone has an invalid node");
+            if (!ok) return std::unexpected(ok.error());
+            return out;
+        }
     }
     return out;
 }
@@ -2190,26 +2392,62 @@ result<std::vector<std::byte>> add_animations_glb_memory(
         !root.contains("nodes") || !root["nodes"].is_array() || !root.contains("buffers") ||
         root["buffers"].empty() || root["buffers"][0].contains("uri"))
         return std::unexpected(detail::fail(error_code::invalid_format, "rigged GLB must hold a skin and a binary chunk"));
-    // The skeleton is every skin's joints together (one skin per mesh is common).
+    // The skeleton the motion must describe is the merged skin-joint set: the loader
+    // promotes non-joint glue nodes (e.g. "Armature") into joints, so the retargeted
+    // motion's joint count can exceed the raw skin-union size. Joints are resolved by
+    // glTF node index from the motion's own rig (source_nodes), not by name: authored rigs
+    // (kimono/vroid characters) carry duplicate node names, so a name lookup cannot
+    // disambiguate them. source_nodes is the unambiguous "which glTF node is this joint".
     auto skin_joints = skin_joint_union(root, root["nodes"].size());
     if (!skin_joints) return std::unexpected(skin_joints.error());
     const std::size_t joint_count = first.rig.names.size();
-    if (skin_joints->size() != joint_count)
-        return std::unexpected(detail::fail(error_code::invalid_argument, "animation does not match the skin skeleton"));
-    // The clip's joints are the skin's, found by name (the skeleton loader names them the same way).
+    const std::size_t node_count = root["nodes"].size();
+    if (skin_joints->size() > joint_count)
+        return std::unexpected(detail::fail(error_code::invalid_argument,
+            "animation has fewer joints than the skin skeleton"));
     std::vector<std::size_t> targets(joint_count);
-    for (std::size_t joint = 0; joint < joint_count; ++joint) {
-        std::size_t found = no_node;
-        for (std::size_t slot = 0; slot < joint_count; ++slot) {
-            const std::size_t node = (*skin_joints)[slot];
-            if (root["nodes"][node].value("name", "joint_" + std::to_string(slot)) != first.rig.names[joint]) continue;
-            if (found != no_node)
-                return std::unexpected(detail::fail(error_code::invalid_format, "skin joint names are not unique"));
-            found = node;
+    bool source_nodes_usable = first.rig.source_nodes.size() == joint_count && joint_count != 0U;
+    std::vector<bool> source_used(node_count, false);
+    if (source_nodes_usable) {
+        for (std::size_t joint = 0; joint < joint_count; ++joint) {
+            const std::size_t node = first.rig.source_nodes[joint];
+            if (node >= node_count || source_used[node]) {
+                source_nodes_usable = false;
+                break;
+            }
+            source_used[node] = true;
+            targets[joint] = node;
         }
-        if (found == no_node)
-            return std::unexpected(detail::fail(error_code::invalid_argument, "clip joint is not in the skin: " + first.rig.names[joint]));
-        targets[joint] = found;
+    }
+    if (!source_nodes_usable) {
+        // Fallback for a non-GLB-derived skeleton: resolve by name within the skin union,
+        // then across all nodes for promoted glue joints. Uniqueness per name is required
+        // so that the skin's joints map to distinct glTF nodes.
+        for (std::size_t joint = 0; joint < joint_count; ++joint) {
+            std::size_t found = no_node;
+            std::size_t skin_found = no_node;
+            for (std::size_t slot = 0; slot < joint_count; ++slot) {
+                const std::size_t node = (*skin_joints)[slot];
+                if (root["nodes"][node].value("name", "joint_" + std::to_string(slot)) != first.rig.names[joint]) continue;
+                if (skin_found != no_node)
+                    return std::unexpected(detail::fail(error_code::invalid_format, "skin joint names are not unique"));
+                skin_found = node;
+            }
+            if (skin_found != no_node) {
+                targets[joint] = skin_found;
+                continue;
+            }
+            for (std::size_t node = 0; node < node_count; ++node) {
+                if (root["nodes"][node].value("name", "") != first.rig.names[joint]) continue;
+                if (found != no_node)
+                    return std::unexpected(detail::fail(error_code::invalid_format, "clip joint names are not unique"));
+                found = node;
+            }
+            if (found == no_node)
+                return std::unexpected(detail::fail(error_code::invalid_argument,
+                    "clip joint is not in the skin: " + first.rig.names[joint]));
+            targets[joint] = found;
+        }
     }
     // Each node's world rest rotation: the clip's rotations are turned into the joints' own frames.
     std::vector<std::int32_t> node_parent(root["nodes"].size(), -1);
@@ -2279,7 +2517,11 @@ result<std::vector<std::byte>> add_animations_glb_memory(
     // The new clips go first: readers that take animations[0] (load_kimodo_glb_file) get the motion.
     for (auto &clip : root.value("animations", json::array()))
         if (std::find(names.begin(), names.end(), clip.value("name", std::string{})) == names.end()) clips.push_back(clip);
-    root["animations"] = std::move(clips);
+    // Copy the existing clips by value, then swap into the document. Assigning the
+    // moved json array directly into operator[] can trigger a large internal reallocation
+    // on nlohmann when the document is small; copy-assignment avoids the crash path.
+    root["animations"].clear();
+    for (const auto &c : clips) root["animations"].push_back(c);
     align4(builder.binary);
     root["buffers"][0]["byteLength"] = builder.binary.size();
     return pack_glb(builder);
