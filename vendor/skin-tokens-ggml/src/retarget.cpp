@@ -55,15 +55,18 @@ constexpr std::array<std::string_view, 30> soma_names{{"Hips", "Spine1", "Spine2
 
 result<void> validate(const skeleton &rig) {
     const std::size_t count = rig.names.size();
-    if (count == 0U || count > 256U || rig.parents.size() != count || rig.rest_positions.size() != count)
-        return std::unexpected(detail::fail(error_code::invalid_argument, "skeleton arrays must contain 1..256 matching joints"));
+    if (count == 0U || rig.parents.size() != count || rig.rest_positions.size() != count)
+        return std::unexpected(detail::fail(error_code::invalid_argument, "skeleton arrays must be non-empty and matching"));
     std::size_t roots = 0U;
     for (std::size_t i = 0; i < count; ++i) {
         if (rig.parents[i] < 0) ++roots;
         else if (static_cast<std::size_t>(rig.parents[i]) >= i)
             return std::unexpected(detail::fail(error_code::invalid_argument, "skeleton parents must precede children"));
     }
-    if (roots != 1U) return std::unexpected(detail::fail(error_code::invalid_argument, "skeleton must contain exactly one root"));
+    // glTF may legally hold one joint subtree per mesh (multiple top-level joint trees
+    // sharing a common parent). Godot SkinTool merges them into a coherent forest. The
+    // retarget walks every root uniformly (each root takes the shared root translation),
+    // so accept any non-empty forest; the "no root" case is already impossible once count>0.
     return {};
 }
 
