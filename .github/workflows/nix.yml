@@ -1,0 +1,130 @@
+# skintokens.elf: the flake builds it (RFD66606-2501), ORAS publishes
+# it to ghcr.io/v-sekai-fire/interactor-skintokens-guest, and the
+# GitHub release is a copy of the files pulled by digest.
+name: nix
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  breaker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    outputs:
+      closed: ${{ steps.breaker.outputs.closed }}
+    steps:
+      - id: breaker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          failed=$(gh run list -R "$GITHUB_REPOSITORY" \
+            --workflow nix.yml \
+            --branch "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" \
+            --status completed --limit 20 --json conclusion \
+            --jq '[.[]|select(.conclusion=="success" or
+              .conclusion=="failure")][0:3]
+              |map(select(.conclusion=="failure"))|length')
+          if [ "$failed" -ge 3 ] &&
+             [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
+            echo closed=false >> "$GITHUB_OUTPUT"
+            echo "Circuit open: the last 3 builds failed." \
+              "Run nix by hand after a fix." >> "$GITHUB_STEP_SUMMARY"
+            gh run cancel "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY"
+          else
+            echo closed=true >> "$GITHUB_OUTPUT"
+          fi
+  build:
+    needs: breaker
+    if: needs.breaker.outputs.closed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      tag: ${{ steps.push.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - id: key
+        run: |
+          lock=${{ hashFiles('flake.lock') }}
+          echo "key=nix-$RUNNER_OS-$lock" >> "$GITHUB_OUTPUT"
+      - uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: ${{ steps.key.outputs.key }}-${{ github.sha }}
+          restore-prefixes-first-match: |
+            ${{ steps.key.outputs.key }}-
+            nix-${{ runner.os }}-
+          gc-max-store-size-linux: 4G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+      - run: nix flake check --no-build
+      - run: nix build .#skintokens-elf -L --out-link result
+      - if: github.event_name == 'push'
+        uses: oras-project/setup-oras@v1
+      - id: push
+        if: github.event_name == 'push'
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          when=$(git show -s --format=%ct)
+          stamp=$(date -u -d @"$when" +%Y%m%d%H%M%S)
+          tag="v0.0.0-$stamp-${GITHUB_SHA:0:12}"
+          mkdir out
+          cp -L result/skintokens.elf result/skintokens.elf.siblings.txt out/
+          chmod u+w out/*
+          cd out
+          sha256sum skintokens.elf skintokens.elf.siblings.txt > SHA256SUMS
+          echo "$TOKEN" |
+            oras login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          digest=$(oras push \
+            "ghcr.io/v-sekai-fire/interactor-skintokens-guest:$tag" \
+            --artifact-type application/vnd.v-sekai.guest.elf \
+            skintokens.elf skintokens.elf.siblings.txt SHA256SUMS \
+            --format go-template='{{.digest}}')
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "oras pull" \
+            "ghcr.io/v-sekai-fire/interactor-skintokens-guest@$digest" \
+            "($tag)" >> "$GITHUB_STEP_SUMMARY"
+  release:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - uses: oras-project/setup-oras@v1
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -eu
+          echo "$GH_TOKEN" |
+            oras login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          oras pull \
+            "ghcr.io/v-sekai-fire/interactor-skintokens-guest@$DIGEST" \
+            -o pulled
+          cd pulled
+          sha256sum -c --quiet SHA256SUMS
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "skintokens.elf $TAG" \
+            --notes "Copied from ghcr.io/v-sekai-fire/interactor-skintokens-guest@$DIGEST. Check the files with SHA256SUMS." \
+            skintokens.elf skintokens.elf.siblings.txt SHA256SUMS
