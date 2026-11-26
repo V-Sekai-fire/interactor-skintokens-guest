@@ -1,0 +1,109 @@
+{
+  "nodes": {
+    "ggml": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791166653,
+        "narHash": "sha256-S9q7zfriTp+CXmlrnvJqReSJQb+e66LPMr28suyzGxs=",
+        "owner": "V-Sekai-fire",
+        "repo": "ggml",
+        "rev": "29cae86726d8ae2b4d699d8e432fd1bb1801e959",
+        "type": "github"
+      },
+      "original": {
+        "owner": "V-Sekai-fire",
+        "repo": "ggml",
+        "type": "github"
+      }
+    },
+    "ggml-rd": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1795376595,
+        "narHash": "sha256-pQQ46bapl00spuWItsRmeYkK1oz1c6Lva/CxsUtEUU4=",
+        "owner": "V-Sekai-fire",
+        "repo": "contract-ggml-rd",
+        "rev": "c40199b85b55f8e2e1c8154fdaae585ac27cc1a7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "V-Sekai-fire",
+        "repo": "contract-ggml-rd",
+        "type": "github"
+      }
+    },
+    "guest-runtime": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1795376595,
+        "narHash": "sha256-ashGEmfOi4gwnaOnUXJQwgqCbJSk4u1MBINThDyQ/UM=",
+        "owner": "V-Sekai-fire",
+        "repo": "contract-guest-runtime",
+        "rev": "e093f7d2f7fe9c49899195810a765fc29f2f2c82",
+        "type": "github"
+      },
+      "original": {
+        "owner": "V-Sekai-fire",
+        "repo": "contract-guest-runtime",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1795234589,
+        "narHash": "sha256-f/VVvxf5RsQgWVhUtefoca5ktVg0DA2bnkMOcmSnozo=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "2786a2a72088ecf32aea5b3ec52099e6a7cff78f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "riscv64-sysroot": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793572743,
+        "narHash": "sha256-+XN+RBKHCe6eYEkTWORlLSB8WjRiu8sF5D05Z8BGOjI=",
+        "owner": "V-Sekai-fire",
+        "repo": "repository-riscv64-sysroot",
+        "rev": "585de9e0cfe15fc14f9961083d857d609592de42",
+        "type": "github"
+      },
+      "original": {
+        "owner": "V-Sekai-fire",
+        "repo": "repository-riscv64-sysroot",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "ggml": "ggml",
+        "ggml-rd": "ggml-rd",
+        "guest-runtime": "guest-runtime",
+        "nixpkgs": "nixpkgs",
+        "riscv64-sysroot": "riscv64-sysroot",
+        "slang": "slang"
+      }
+    },
+    "slang": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1783987071,
+        "narHash": "sha256-dXPkrlTdRysQzrk8TZDkGaKJlaDoVbfCM493cmIYQps=",
+        "type": "tarball",
+        "url": "https://github.com/shader-slang/slang/releases/download/v2026.13.1/slang-2026.13.1-linux-x86_64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://github.com/shader-slang/slang/releases/download/v2026.13.1/slang-2026.13.1-linux-x86_64.tar.gz"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
